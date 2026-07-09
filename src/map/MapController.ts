@@ -8,12 +8,14 @@ export class MapController {
     private userLocationMarker: maplibregl.Marker | null;
     private readonly mapReadyPromise: Promise<void>;
     private resolveMapReady: (() => void) | null;
+    private readonly bearingChangeListeners: Array<(bearing: number) => void>;
 
     constructor(container: HTMLElement) {
         this.container = container;
         this.map = null;
         this.userLocationMarker = null;
         this.resolveMapReady = null;
+        this.bearingChangeListeners = [];
         this.mapReadyPromise = new Promise((resolve) => {
             this.resolveMapReady = resolve;
         });
@@ -27,9 +29,7 @@ export class MapController {
             container: this.container,
             center: [-3.1883, 55.9533],
             zoom: 8,
-            attributionControl: {
-                compact: true
-            },
+            attributionControl: false,
             style: {
                 version: 8,
                 sources: {},
@@ -58,7 +58,30 @@ export class MapController {
             });
 
             this.resolveMapReady?.();
-          this.resolveMapReady = null;
+            this.resolveMapReady = null;
+            this.notifyBearingChange();
+        });
+
+        // The shell needs to know when the map is rotated so it can surface a
+        // temporary north-up control without owning any map internals itself.
+        this.map.on('rotate', () => {
+            this.notifyBearingChange();
+        });
+    }
+
+    public onBearingChange(listener: (bearing: number) => void): void {
+        this.bearingChangeListeners.push(listener);
+
+        if (this.map) {
+            listener(this.getNormalizedBearing());
+        }
+    }
+
+    public resetBearing(): void {
+        this.map?.easeTo({
+            bearing: 0,
+            duration: 250,
+            essential: true
         });
     }
 
@@ -115,5 +138,22 @@ export class MapController {
         this.userLocationMarker
             .setLngLat(coordinates)
             .addTo(this.map);
+    }
+
+    private notifyBearingChange(): void {
+        const bearing = this.getNormalizedBearing();
+        this.bearingChangeListeners.forEach((listener) => {
+            listener(bearing);
+        });
+    }
+
+    private getNormalizedBearing(): number {
+        if (!this.map) {
+            return 0;
+        }
+
+        const bearing = this.map.getBearing();
+
+        return ((bearing % 360) + 360) % 360;
     }
 }

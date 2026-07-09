@@ -115,6 +115,18 @@ body {
     transform-origin: center center;
 }
 
+.map-action-button--ephemeral {
+    opacity: 0;
+    transform: scale(0.82);
+    pointer-events: none;
+}
+
+.map-action-button--ephemeral.is-visible {
+    opacity: 1;
+    transform: scale(1);
+    pointer-events: auto;
+}
+
 .map-overlay-cluster.is-collapsed .map-action-button--collapsible {
     opacity: 0;
     transform: scale(0.82);

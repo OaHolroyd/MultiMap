@@ -1,4 +1,5 @@
 import { MapController } from '../map/MapController';
+import compassIcon from '../assets/compass.svg?raw';
 import downloadIcon from '../assets/download.svg?raw';
 import layersIcon from '../assets/layers.svg?raw';
 import locateIcon from '../assets/locate.svg?raw';
@@ -84,11 +85,13 @@ export class AppShell {
     private readonly container: HTMLElement;
     private mapController: MapController | null;
     private controlsExpanded: boolean;
+    private northResetVisible: boolean;
 
     constructor(container: HTMLElement) {
         this.container = container;
         this.mapController = null;
         this.controlsExpanded = false;
+        this.northResetVisible = false;
     }
 
     public init(): void {
@@ -108,6 +111,16 @@ export class AppShell {
                     class="map-overlay-cluster map-overlay-cluster--bottom-right ${this.controlsExpanded ? '' : 'is-collapsed'}"
                     aria-label="Map controls"
                 >
+                    <button
+                        id="map-reset-bearing-button"
+                        class="map-action-button map-action-button--ephemeral ${this.northResetVisible ? 'is-visible' : ''}"
+                        type="button"
+                        aria-label="Return map to north up"
+                        title="Return map to north up"
+                        ${this.northResetVisible ? '' : 'tabindex="-1" aria-hidden="true"'}
+                    >
+                        ${compassIcon}
+                    </button>
                     <button
                         id="map-toggle-controls-button"
                         class="map-action-button"
@@ -144,15 +157,23 @@ export class AppShell {
         // MapLibre instance and future map-specific behaviors.
         this.mapController = new MapController(mapRoot);
         this.mapController.init();
+        this.mapController.onBearingChange((bearing) => {
+            this.syncNorthResetButton(bearing);
+        });
     }
 
     private bindEvents(): void {
         const toggleButton = this.container.querySelector<HTMLButtonElement>('#map-toggle-controls-button');
+        const resetBearingButton = this.container.querySelector<HTMLButtonElement>('#map-reset-bearing-button');
         const locateButton = this.container.querySelector<HTMLButtonElement>('#map-locate-button');
 
         toggleButton?.addEventListener('click', () => {
             this.controlsExpanded = !this.controlsExpanded;
             this.syncControlsVisibility();
+        });
+
+        resetBearingButton?.addEventListener('click', () => {
+            this.mapController?.resetBearing();
         });
 
         locateButton?.addEventListener('click', async () => {
@@ -208,6 +229,23 @@ export class AppShell {
         // Updating the icon inline keeps the toggle self-contained without
         // requiring a full re-render of the map shell.
         toggleButton.innerHTML = this.renderToggleIcon();
+    }
+
+    private syncNorthResetButton(bearing: number): void {
+        const resetBearingButton = this.container.querySelector<HTMLButtonElement>('#map-reset-bearing-button');
+
+        if (!resetBearingButton) {
+            return;
+        }
+
+        // Small floating point drift is common during map animations, so the
+        // button appears only once the rotation is visually meaningful.
+        const shouldShow = Math.abs(bearing) > 0.5 && Math.abs(bearing - 360) > 0.5;
+        this.northResetVisible = shouldShow;
+
+        resetBearingButton.classList.toggle('is-visible', shouldShow);
+        resetBearingButton.tabIndex = shouldShow ? 0 : -1;
+        resetBearingButton.setAttribute('aria-hidden', shouldShow ? 'false' : 'true');
     }
 
     private bindPlaceholderControlHandlers(): void {
