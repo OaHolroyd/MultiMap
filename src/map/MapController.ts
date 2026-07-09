@@ -5,10 +5,18 @@ import { DEFAULT_RASTER_SOURCE } from './sources';
 export class MapController {
     private readonly container: HTMLElement;
     private map: Map | null;
+    private userLocationMarker: maplibregl.Marker | null;
+    private readonly mapReadyPromise: Promise<void>;
+    private resolveMapReady: (() => void) | null;
 
     constructor(container: HTMLElement) {
         this.container = container;
         this.map = null;
+        this.userLocationMarker = null;
+        this.resolveMapReady = null;
+        this.mapReadyPromise = new Promise((resolve) => {
+            this.resolveMapReady = resolve;
+        });
     }
 
     public init(): void {
@@ -29,7 +37,7 @@ export class MapController {
             }
         });
 
-        this.map.addControl(new maplibregl.NavigationControl(), 'top-right');
+        // this.map.addControl(new maplibregl.NavigationControl(), 'top-right');
 
         this.map.on('load', () => {
             if (!this.map) {
@@ -48,6 +56,64 @@ export class MapController {
                 type: 'raster',
                 source: DEFAULT_RASTER_SOURCE.id
             });
+
+            this.resolveMapReady?.();
+          this.resolveMapReady = null;
         });
+    }
+
+    public async zoomToUserPosition(): Promise<void> {
+        if (!('geolocation' in navigator)) {
+            throw new Error('Geolocation is not available in this browser.');
+        }
+
+        await this.mapReadyPromise;
+
+        const position = await this.getCurrentPosition();
+        const userCoordinates: [number, number] = [
+            position.coords.longitude,
+            position.coords.latitude
+        ];
+
+        this.renderUserLocation(userCoordinates);
+
+        // Flying to the reported position keeps the custom locate action
+        // visually aligned with what users expect from native map controls.
+        this.map?.flyTo({
+            center: userCoordinates,
+            zoom: Math.max(this.map.getZoom(), 14),
+            essential: true
+        });
+    }
+
+    private async getCurrentPosition(): Promise<GeolocationPosition> {
+        return await new Promise<GeolocationPosition>((resolve, reject) => {
+            navigator.geolocation.getCurrentPosition(resolve, reject, {
+                enableHighAccuracy: true,
+                timeout: 10000,
+                maximumAge: 0
+            });
+        });
+    }
+
+    private renderUserLocation(coordinates: [number, number]): void {
+        if (!this.map) {
+            return;
+        }
+
+        if (!this.userLocationMarker) {
+            const markerElement = document.createElement('div');
+            markerElement.className = 'user-location-marker';
+
+            // The marker is a DOM element so we can style it consistently with
+            // the rest of the shell instead of relying on a library default.
+            this.userLocationMarker = new maplibregl.Marker({
+                element: markerElement
+            });
+        }
+
+        this.userLocationMarker
+            .setLngLat(coordinates)
+            .addTo(this.map);
     }
 }

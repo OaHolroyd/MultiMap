@@ -4,6 +4,13 @@
     color: #1b2421;
     background: #dfe7df;
     font-family: Inter, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    --control-text-color: #f7faf8;
+    --control-bg-color: rgba(24, 35, 30, 0.92);
+    --control-bg-color-hover: rgba(37, 51, 45, 0.96);
+    --control-focus-ring-color: #ffffff;
+    --user-location-marker-color: #1f74ff;
+    --user-location-marker-border-color: #ffffff;
+    --user-location-marker-glow-color: rgba(31, 116, 255, 0.18);
 }
 
 html,
@@ -29,30 +36,114 @@ body {
     inset: 0;
 }
 
-.map-action-button {
+.map-overlay-cluster {
     position: absolute;
-    right: 20px;
-    bottom: 20px;
     z-index: 2;
-    min-width: 88px;
-    height: 44px;
-    padding: 0 16px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+}
+
+.map-overlay-cluster--top-left {
+    top: 12px;
+    left: 12px;
+}
+
+.map-overlay-cluster--top-right {
+    top: 12px;
+    right: 12px;
+}
+
+.map-overlay-cluster--bottom-right {
+    right: 12px;
+    bottom: 12px;
+}
+
+.map-overlay-cluster--bottom-right > .map-action-button + .map-action-button {
+    margin-top: 6px;
+}
+
+.map-secondary-controls {
+    display: grid;
+    grid-template-rows: 1fr;
+    margin-top: 6px;
+    opacity: 1;
+    overflow: hidden;
+    transition: grid-template-rows 180ms ease, margin-top 180ms ease, opacity 180ms ease;
+}
+
+.map-secondary-controls > * {
+    min-height: 0;
+}
+
+.map-secondary-controls__content {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    align-items: center;
+}
+
+.map-overlay-cluster.is-collapsed .map-secondary-controls {
+    grid-template-rows: 0fr;
+    margin-top: 0;
+    opacity: 0;
+    pointer-events: none;
+}
+
+.map-action-button {
+    display: grid;
+    place-items: center;
+    width: 36px;
+    height: 36px;
+    padding: 0;
     border: 0;
-    border-radius: 8px;
-    background: rgba(24, 35, 30, 0.92);
-    color: #f7faf8;
-    font-size: 14px;
-    font-weight: 600;
+    border-radius: 999px;
+    background: var(--control-bg-color);
+    color: var(--control-text-color);
     cursor: pointer;
     box-shadow: 0 10px 30px rgba(0, 0, 0, 0.18);
     backdrop-filter: blur(10px);
+    transition: transform 140ms ease, opacity 140ms ease, background 140ms ease;
+}
+
+.map-action-button:disabled {
+    cursor: progress;
+    opacity: 0.75;
+}
+
+.map-action-button--collapsible {
+    transform-origin: center center;
+}
+
+.map-overlay-cluster.is-collapsed .map-action-button--collapsible {
+    opacity: 0;
+    transform: scale(0.82);
+    pointer-events: none;
+}
+
+.map-action-button.is-loading .map-action-icon {
+    opacity: 0.55;
 }
 
 .map-action-button:hover {
-    background: rgba(37, 51, 45, 0.96);
+    background: var(--control-bg-color-hover);
 }
 
 .map-action-button:focus-visible {
-    outline: 2px solid #ffffff;
+    outline: 2px solid var(--control-focus-ring-color);
     outline-offset: 2px;
+}
+
+.map-action-icon {
+    width: 22px;
+    height: 22px;
+}
+
+.user-location-marker {
+    width: 18px;
+    height: 18px;
+    border: 3px solid var(--user-location-marker-border-color);
+    border-radius: 999px;
+    background: var(--user-location-marker-color);
+    box-shadow: 0 0 0 6px var(--user-location-marker-glow-color);
 }
