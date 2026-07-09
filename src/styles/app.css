@@ -32,20 +32,14 @@ body {
 
 #app {
     position: fixed;
-    top: 0;
-    right: 0;
-    bottom: calc(-1 * var(--safe-area-bottom));
-    left: 0;
+    inset: 0;
     min-height: 100vh;
     min-height: 100dvh;
 }
 
 .app-shell {
     position: fixed;
-    top: 0;
-    right: 0;
-    bottom: calc(-1 * var(--safe-area-bottom));
-    left: 0;
+    inset: 0;
 }
 
 .map-root {
