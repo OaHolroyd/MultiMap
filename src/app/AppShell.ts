@@ -1,54 +1,309 @@
+import { MapController } from '../map/MapController';
+import compassIcon from '../assets/compass.svg?raw';
+import downloadIcon from '../assets/download.svg?raw';
+import layersIcon from '../assets/layers.svg?raw';
+import locateIcon from '../assets/locate.svg?raw';
+import routesIcon from '../assets/routes.svg?raw';
+import searchIcon from '../assets/search.svg?raw';
+import settingsIcon from '../assets/settings.svg?raw';
+import toggleCollapseIcon from '../assets/toggle-collapse.svg?raw';
+import toggleExpandIcon from '../assets/toggle-expand.svg?raw';
+import viewModeIcon from '../assets/view-mode.svg?raw';
+
+interface CollapsibleControlDefinition {
+    readonly id: string;
+    readonly label: string;
+    readonly icon: string;
+    readonly onClickMessage: string;
+}
+
+interface ControlClusterDefinition {
+    readonly className: string;
+    readonly ariaLabel: string;
+    readonly controls: readonly CollapsibleControlDefinition[];
+}
+
+const TOP_LEFT_CONTROLS: readonly CollapsibleControlDefinition[] = [
+    {
+        id: 'map-search-button',
+        label: 'Search',
+        icon: searchIcon,
+        onClickMessage: 'Search button clicked.'
+    }
+];
+
+const TOP_RIGHT_CONTROLS: readonly CollapsibleControlDefinition[] = [
+    {
+        id: 'map-view-mode-button',
+        label: 'Toggle 3D and 2D view',
+        icon: viewModeIcon,
+        onClickMessage: 'View mode button clicked.'
+    },
+    {
+        id: 'map-download-area-button',
+        label: 'Download area',
+        icon: downloadIcon,
+        onClickMessage: 'Download area button clicked.'
+    }
+];
+
+const BOTTOM_RIGHT_CONTROLS: readonly CollapsibleControlDefinition[] = [
+    {
+        id: 'map-layers-button',
+        label: 'Layers',
+        icon: layersIcon,
+        onClickMessage: 'Layers button clicked.'
+    },
+    {
+        id: 'map-routes-button',
+        label: 'Routes',
+        icon: routesIcon,
+        onClickMessage: 'Routes button clicked.'
+    },
+    {
+        id: 'map-settings-button',
+        label: 'Settings',
+        icon: settingsIcon,
+        onClickMessage: 'Settings button clicked.'
+    }
+];
+
+const CONTROL_CLUSTERS: readonly ControlClusterDefinition[] = [
+    {
+        className: 'map-overlay-cluster--top-left',
+        ariaLabel: 'Search controls',
+        controls: TOP_LEFT_CONTROLS
+    },
+    {
+        className: 'map-overlay-cluster--top-right',
+        ariaLabel: 'View controls',
+        controls: TOP_RIGHT_CONTROLS
+    }
+];
+
 export class AppShell {
-    private container: HTMLElement;
+    private readonly container: HTMLElement;
+    private mapController: MapController | null;
+    private controlsExpanded: boolean;
+    private northResetVisible: boolean;
 
     constructor(container: HTMLElement) {
         this.container = container;
+        this.mapController = null;
+        this.controlsExpanded = false;
+        this.northResetVisible = false;
     }
 
     public init(): void {
         this.render();
+        this.mountMap();
         this.bindEvents();
     }
 
     private render(): void {
         this.container.innerHTML = `
-            <div style="max-width: 600px; margin: 2rem auto; padding: 2rem; background: #ffffff; border-radius: 12px; box-shadow: 0 4px 12px rgba(0,0,0,0.05); text-align: center;">
-                <span style="font-size: 4rem;">🥾</span>
-                <h1 style="color: #2e4a3f; margin-top: 1rem;">TrailMap PWA</h1>
-                <p style="color: #60736c; line-height: 1.6;">Your next-generation offline hiking mapping environment is being initialized.</p>
+            <div class="app-shell">
+                <div id="map-root" class="map-root" aria-label="Map view"></div>
 
-                <div style="margin: 2rem 0; padding: 1rem; background: #f8faf7; border-radius: 8px; border-left: 4px solid #2e4a3f; text-align: left;">
-                    <strong style="display: block; margin-bottom: 0.5rem; color: #2e4a3f;">🔧 Core Diagnostics:</strong>
-                    <ul style="margin: 0; padding-left: 1.2rem; font-family: monospace; font-size: 0.9rem; color: #40524a;">
-                        <li>OPFS Availability: <span id="diag-opfs">Checking...</span></li>
-                        <li>Service Worker Profile: <span id="diag-sw">${'serviceWorker' in navigator ? 'Supported' : 'Unsupported'}</span></li>
-                        <li>Online Status: <span id="diag-online">${navigator.onLine ? 'Online 🌐' : 'Offline 🛑'}</span></li>
-                    </ul>
+                ${CONTROL_CLUSTERS.map((cluster) => this.renderCollapsibleCluster(cluster)).join('')}
+
+                <div
+                    class="map-overlay-cluster map-overlay-cluster--bottom-right ${this.controlsExpanded ? '' : 'is-collapsed'}"
+                    aria-label="Map controls"
+                >
+                    <button
+                        id="map-reset-bearing-button"
+                        class="map-action-button map-action-button--ephemeral ${this.northResetVisible ? 'is-visible' : ''}"
+                        type="button"
+                        aria-label="Return map to north up"
+                        title="Return map to north up"
+                        ${this.northResetVisible ? '' : 'tabindex="-1" aria-hidden="true"'}
+                    >
+                        ${compassIcon}
+                    </button>
+                    <button
+                        id="map-toggle-controls-button"
+                        class="map-action-button"
+                        type="button"
+                        aria-label="${this.controlsExpanded ? 'Minimise map controls' : 'Expand map controls'}"
+                        aria-expanded="${this.controlsExpanded ? 'true' : 'false'}"
+                        title="${this.controlsExpanded ? 'Minimise map controls' : 'Expand map controls'}"
+                    >
+                        ${this.renderToggleIcon()}
+                    </button>
+                    <button
+                        id="map-locate-button"
+                        class="map-action-button"
+                        type="button"
+                        aria-label="Zoom to your location"
+                        title="Zoom to your location"
+                    >
+                        ${locateIcon}
+                    </button>
+                    ${this.renderCollapsibleControls(BOTTOM_RIGHT_CONTROLS)}
                 </div>
-
-                <footer style="margin-top: 2rem; font-size: 0.8rem; color: #a0b0aa;">
-                    Build Context: ${import.meta.env.MODE.toUpperCase()}
-                </footer>
             </div>
         `;
     }
 
-    private bindEvents(): void {
-        const opfsEl = document.getElementById('diag-opfs');
-        if (opfsEl) {
-            opfsEl.textContent = typeof navigator.storage?.getDirectory === 'function'
-                ? '✅ Verified (Ready for tile staging)'
-                : '❌ Missing (Browser upgrade needed)';
+    private mountMap(): void {
+        const mapRoot = this.container.querySelector<HTMLElement>('#map-root');
+
+        if (!mapRoot) {
+            throw new Error('Map root container was not rendered.');
         }
 
-        window.addEventListener('online', () => this.updateOnlineStatus(true));
-        window.addEventListener('offline', () => this.updateOnlineStatus(false));
+        // The shell owns the page structure, while the controller owns the
+        // MapLibre instance and future map-specific behaviors.
+        this.mapController = new MapController(mapRoot);
+        this.mapController.init();
+        this.mapController.onBearingChange((bearing) => {
+            this.syncNorthResetButton(bearing);
+        });
     }
 
-    private updateOnlineStatus(isOnline: boolean): void {
-        const onlineEl = document.getElementById('diag-online');
-        if (onlineEl) {
-            onlineEl.textContent = isOnline ? 'Online 🌐' : 'Offline 🛑';
+    private bindEvents(): void {
+        const toggleButton = this.container.querySelector<HTMLButtonElement>('#map-toggle-controls-button');
+        const resetBearingButton = this.container.querySelector<HTMLButtonElement>('#map-reset-bearing-button');
+        const locateButton = this.container.querySelector<HTMLButtonElement>('#map-locate-button');
+
+        toggleButton?.addEventListener('click', () => {
+            this.controlsExpanded = !this.controlsExpanded;
+            this.syncControlsVisibility();
+        });
+
+        resetBearingButton?.addEventListener('click', () => {
+            this.mapController?.resetBearing();
+        });
+
+        locateButton?.addEventListener('click', async () => {
+            if (!this.mapController) {
+                return;
+            }
+
+            locateButton.disabled = true;
+            locateButton.classList.add('is-loading');
+
+            try {
+                await this.mapController.zoomToUserPosition();
+            } catch (error) {
+                console.error('Unable to retrieve user location.', error);
+            } finally {
+                locateButton.disabled = false;
+                locateButton.classList.remove('is-loading');
+            }
+        });
+
+        this.bindPlaceholderControlHandlers();
+    }
+
+    private syncControlsVisibility(): void {
+        const toggleButton = this.container.querySelector<HTMLButtonElement>('#map-toggle-controls-button');
+        const controlClusters = this.container.querySelectorAll<HTMLElement>('.map-overlay-cluster');
+        const collapsibleSections = this.container.querySelectorAll<HTMLElement>('.map-secondary-controls');
+        const collapsibleButtons = this.container.querySelectorAll<HTMLButtonElement>('.map-action-button--collapsible');
+
+        if (!toggleButton) {
+            return;
         }
+
+        controlClusters.forEach((cluster) => {
+            cluster.classList.toggle('is-collapsed', !this.controlsExpanded);
+        });
+
+        collapsibleSections.forEach((section) => {
+            section.setAttribute('aria-hidden', this.controlsExpanded ? 'false' : 'true');
+        });
+
+        collapsibleButtons.forEach((button) => {
+            button.tabIndex = this.controlsExpanded ? 0 : -1;
+        });
+
+        const buttonLabel = this.controlsExpanded
+            ? 'Minimise map controls'
+            : 'Expand map controls';
+        toggleButton.setAttribute('aria-label', buttonLabel);
+        toggleButton.setAttribute('aria-expanded', this.controlsExpanded ? 'true' : 'false');
+        toggleButton.setAttribute('title', buttonLabel);
+
+        // Updating the icon inline keeps the toggle self-contained without
+        // requiring a full re-render of the map shell.
+        toggleButton.innerHTML = this.renderToggleIcon();
+    }
+
+    private syncNorthResetButton(bearing: number): void {
+        const resetBearingButton = this.container.querySelector<HTMLButtonElement>('#map-reset-bearing-button');
+
+        if (!resetBearingButton) {
+            return;
+        }
+
+        // Small floating point drift is common during map animations, so the
+        // button appears only once the rotation is visually meaningful.
+        const shouldShow = Math.abs(bearing) > 0.5 && Math.abs(bearing - 360) > 0.5;
+        this.northResetVisible = shouldShow;
+
+        resetBearingButton.classList.toggle('is-visible', shouldShow);
+        resetBearingButton.tabIndex = shouldShow ? 0 : -1;
+        resetBearingButton.setAttribute('aria-hidden', shouldShow ? 'false' : 'true');
+    }
+
+    private bindPlaceholderControlHandlers(): void {
+        const placeholderControls = [
+            ...TOP_LEFT_CONTROLS,
+            ...TOP_RIGHT_CONTROLS,
+            ...BOTTOM_RIGHT_CONTROLS
+        ];
+
+        // Centralizing the placeholder bindings keeps the shell readable now,
+        // and gives us one place to swap in real handlers as controls graduate
+        // from dummy actions to real features.
+        placeholderControls.forEach((control) => {
+            this.container
+                .querySelector<HTMLButtonElement>(`#${control.id}`)
+                ?.addEventListener('click', () => {
+                    console.debug(control.onClickMessage);
+                });
+        });
+    }
+
+    private renderCollapsibleCluster(cluster: ControlClusterDefinition): string {
+        return `
+            <div
+                class="map-overlay-cluster ${cluster.className} ${this.controlsExpanded ? '' : 'is-collapsed'}"
+                aria-label="${cluster.ariaLabel}"
+            >
+                ${this.renderCollapsibleControls(cluster.controls)}
+            </div>
+        `;
+    }
+
+    private renderCollapsibleControls(controls: readonly CollapsibleControlDefinition[]): string {
+        return `
+            <div class="map-secondary-controls" aria-hidden="${this.controlsExpanded ? 'false' : 'true'}">
+                <div class="map-secondary-controls__content">
+                    ${controls.map((control) => this.renderIconButton(control)).join('')}
+                </div>
+            </div>
+        `;
+    }
+
+    private renderIconButton(control: CollapsibleControlDefinition): string {
+        return `
+            <button
+                id="${control.id}"
+                class="map-action-button map-action-button--collapsible"
+                type="button"
+                aria-label="${control.label}"
+                title="${control.label}"
+                ${this.controlsExpanded ? '' : 'tabindex="-1"'}
+            >
+                ${control.icon}
+            </button>
+        `;
+    }
+
+    private renderToggleIcon(): string {
+        return this.controlsExpanded ? toggleCollapseIcon : toggleExpandIcon;
     }
 }

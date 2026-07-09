@@ -1,3 +1,4 @@
+import './styles/app.css';
 import { AppShell } from './app/AppShell';
 
 const appContainer = document.getElementById('app');
