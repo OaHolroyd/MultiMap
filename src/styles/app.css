@@ -1,0 +1,58 @@
+@import 'maplibre-gl/dist/maplibre-gl.css';
+
+:root {
+    color: #1b2421;
+    background: #dfe7df;
+    font-family: Inter, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+}
+
+html,
+body,
+#app {
+    width: 100%;
+    height: 100%;
+    margin: 0;
+}
+
+body {
+    overflow: hidden;
+}
+
+.app-shell {
+    position: relative;
+    width: 100%;
+    height: 100%;
+}
+
+.map-root {
+    position: absolute;
+    inset: 0;
+}
+
+.map-action-button {
+    position: absolute;
+    right: 20px;
+    bottom: 20px;
+    z-index: 2;
+    min-width: 88px;
+    height: 44px;
+    padding: 0 16px;
+    border: 0;
+    border-radius: 8px;
+    background: rgba(24, 35, 30, 0.92);
+    color: #f7faf8;
+    font-size: 14px;
+    font-weight: 600;
+    cursor: pointer;
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.18);
+    backdrop-filter: blur(10px);
+}
+
+.map-action-button:hover {
+    background: rgba(37, 51, 45, 0.96);
+}
+
+.map-action-button:focus-visible {
+    outline: 2px solid #ffffff;
+    outline-offset: 2px;
+}
