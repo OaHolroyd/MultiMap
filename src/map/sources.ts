@@ -1,3 +1,5 @@
+const SWISSTOPO_BOUNDS: [number, number, number, number] = [5.140242, 45.398181, 11.47757, 48.230651];
+
 export interface RasterSourceConfig {
   readonly id: string;
   readonly layerId: string;
@@ -7,6 +9,7 @@ export interface RasterSourceConfig {
   readonly bounds: [number, number, number, number] | null;
   readonly attribution: string;
   readonly example_zxy: readonly [number, number, number];
+  readonly opacity: number,
 }
 
 export const SOURCE_OPEN_TOPO_MAP: RasterSourceConfig = {
@@ -18,6 +21,7 @@ export const SOURCE_OPEN_TOPO_MAP: RasterSourceConfig = {
   bounds: null,
   attribution: '© OpenStreetMap contributors',
   example_zxy: [12, 2132, 1457],
+  opacity: 1.0,
 };
 
 export const SOURCE_OPEN_STREET_MAP: RasterSourceConfig = {
@@ -29,6 +33,7 @@ export const SOURCE_OPEN_STREET_MAP: RasterSourceConfig = {
   bounds: null,
   attribution: '© OpenStreetMap contributors',
   example_zxy: [13, 4054, 2685],
+  opacity: 1.0,
 };
 
 export const SOURCE_SWISSTOPO_BASE: RasterSourceConfig = {
@@ -37,9 +42,10 @@ export const SOURCE_SWISSTOPO_BASE: RasterSourceConfig = {
   tiles: ['https://wmts.geo.admin.ch/1.0.0/ch.swisstopo.pixelkarte-farbe/default/current/3857/{z}/{x}/{y}.jpeg'],
   tileSize: 256,
   zlims: [0, 19],
-  bounds: [5.140242, 45.398181, 11.47757, 48.230651],
+  bounds: SWISSTOPO_BOUNDS,
   attribution: '© swisstopo',
   example_zxy: [13, 4271, 2911],
+  opacity: 1.0,
 };
 
 export const SOURCE_ESRI_SATELLITE: RasterSourceConfig = {
@@ -51,6 +57,7 @@ export const SOURCE_ESRI_SATELLITE: RasterSourceConfig = {
   bounds: null,
   attribution: '© Esri, Maxar, Earthstar Geographics, and the GIS User Community',
   example_zxy: [13, 4149, 2818],
+  opacity: 1.0,
 };
 
 export let SOURCES_RASTER = [
@@ -70,6 +77,7 @@ export const SOURCE_ESRI_PLACES: RasterSourceConfig = {
   bounds: null,
   attribution: '© Esri, Maxar, Earthstar Geographics, and the GIS User Community',
   example_zxy: [13, 4149, 2818],
+  opacity: 1.0,
 };
 
 export const SOURCE_ESRI_TRANSPORTATION: RasterSourceConfig = {
@@ -81,6 +89,7 @@ export const SOURCE_ESRI_TRANSPORTATION: RasterSourceConfig = {
   bounds: null,
   attribution: '© Esri, Maxar, Earthstar Geographics, and the GIS User Community',
   example_zxy: [13, 4149, 2818],
+  opacity: 1.0,
 };
 
 export const SOURCE_CARTO_LABELS: RasterSourceConfig = {
@@ -92,12 +101,39 @@ export const SOURCE_CARTO_LABELS: RasterSourceConfig = {
   bounds: null,
   attribution: '© OpenStreetMap contributors © CARTO',
   example_zxy: [13, 4149, 2818],
+  opacity: 1.0,
+};
+
+export const SOURCE_SWISSTOPO_TRAILS: RasterSourceConfig = {
+  id: 'swisstopo-trails',
+  layerId: 'SwissTopoTrails',
+  tiles: ['https://wmts.geo.admin.ch/1.0.0/ch.swisstopo.swisstlm3d-wanderwege/default/current/3857/{z}/{x}/{y}.png'],
+  tileSize: 256,
+  zlims: [0, 18],
+  bounds: SWISSTOPO_BOUNDS,
+  attribution: '© swisstopo',
+  example_zxy: [14, 8561, 5766],
+  opacity: 1.0,
+};
+
+export const SOURCE_SWISSTOPO_DOGS: RasterSourceConfig = {
+  id: 'swisstopo-dogs',
+  layerId: 'SwissTopoDogs',
+  tiles: ['https://wmts.geo.admin.ch/1.0.0/ch.bafu.alpweiden-herdenschutzhunde/default/current/3857/{z}/{x}/{y}.png'],
+  tileSize: 256,
+  zlims: [0, 18],
+  bounds: SWISSTOPO_BOUNDS,
+  attribution: '© swisstopo',
+  example_zxy: [14, 8561, 5766],
+  opacity: 0.5,
 };
 
 export let SOURCES_RASTER_OVERLAYS = [
   SOURCE_ESRI_PLACES,
   SOURCE_ESRI_TRANSPORTATION,
-  SOURCE_CARTO_LABELS
+  SOURCE_CARTO_LABELS,
+  SOURCE_SWISSTOPO_TRAILS,
+  SOURCE_SWISSTOPO_DOGS
 ];
 
 

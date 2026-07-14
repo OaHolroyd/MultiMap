@@ -215,7 +215,10 @@ export class MapController {
         this.map.addLayer({
             id: source.layerId,
             type: 'raster',
-            source: source.id
+            source: source.id,
+            paint: {
+              'raster-opacity': source.opacity
+            }
         }, beforeLayerId);
     }
 
