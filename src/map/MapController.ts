@@ -202,6 +202,8 @@ export class MapController {
             type: 'raster',
             tiles: [...source.tiles],
             tileSize: source.tileSize,
+            minzoom: source.zlims[0],
+            maxzoom: source.zlims[1],
             attribution: source.attribution
         });
 
