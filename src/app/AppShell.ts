@@ -1,4 +1,5 @@
 import { MapController } from '../map/MapController';
+import { SOURCES_RASTER, type RasterSourceConfig } from '../map/sources';
 import compassIcon from '../assets/compass.svg?raw';
 import downloadIcon from '../assets/download.svg?raw';
 import layersIcon from '../assets/layers.svg?raw';
@@ -86,12 +87,16 @@ export class AppShell {
     private mapController: MapController | null;
     private controlsExpanded: boolean;
     private northResetVisible: boolean;
+    private layersMenuOpen: boolean;
+    private activeRasterSourceId: string;
 
     constructor(container: HTMLElement) {
         this.container = container;
         this.mapController = null;
-        this.controlsExpanded = false;
+        this.controlsExpanded = true;
         this.northResetVisible = false;
+        this.layersMenuOpen = false;
+        this.activeRasterSourceId = SOURCES_RASTER[0]?.id ?? '';
     }
 
     public init(): void {
@@ -140,6 +145,7 @@ export class AppShell {
                     >
                         ${locateIcon}
                     </button>
+                    ${this.renderLayersPopover()}
                     ${this.renderCollapsibleControls(BOTTOM_RIGHT_CONTROLS)}
                 </div>
             </div>
@@ -160,12 +166,18 @@ export class AppShell {
         this.mapController.onBearingChange((bearing) => {
             this.syncNorthResetButton(bearing);
         });
+        this.mapController.onActiveSourceChange((source) => {
+            this.activeRasterSourceId = source.id;
+            this.syncLayersMenuSelection();
+        });
     }
 
     private bindEvents(): void {
         const toggleButton = this.container.querySelector<HTMLButtonElement>('#map-toggle-controls-button');
         const resetBearingButton = this.container.querySelector<HTMLButtonElement>('#map-reset-bearing-button');
         const locateButton = this.container.querySelector<HTMLButtonElement>('#map-locate-button');
+        const layersButton = this.container.querySelector<HTMLButtonElement>('#map-layers-button');
+        const layersPopover = this.container.querySelector<HTMLElement>('#map-layers-popover');
 
         toggleButton?.addEventListener('click', () => {
             this.controlsExpanded = !this.controlsExpanded;
@@ -194,7 +206,19 @@ export class AppShell {
             }
         });
 
+        layersButton?.addEventListener('click', (event) => {
+            event.stopPropagation();
+            this.layersMenuOpen = !this.layersMenuOpen;
+            this.syncLayersMenuVisibility();
+        });
+
+        layersPopover?.addEventListener('click', (event) => {
+            event.stopPropagation();
+        });
+
+        this.bindLayersPopoverEvents();
         this.bindPlaceholderControlHandlers();
+        document.addEventListener('click', this.handleDocumentClick);
     }
 
     private syncControlsVisibility(): void {
@@ -210,6 +234,11 @@ export class AppShell {
         controlClusters.forEach((cluster) => {
             cluster.classList.toggle('is-collapsed', !this.controlsExpanded);
         });
+
+        if (!this.controlsExpanded && this.layersMenuOpen) {
+            this.layersMenuOpen = false;
+            this.syncLayersMenuVisibility();
+        }
 
         collapsibleSections.forEach((section) => {
             section.setAttribute('aria-hidden', this.controlsExpanded ? 'false' : 'true');
@@ -252,7 +281,7 @@ export class AppShell {
         const placeholderControls = [
             ...TOP_LEFT_CONTROLS,
             ...TOP_RIGHT_CONTROLS,
-            ...BOTTOM_RIGHT_CONTROLS
+            ...BOTTOM_RIGHT_CONTROLS.filter((control) => control.id !== 'map-layers-button')
         ];
 
         // Centralizing the placeholder bindings keeps the shell readable now,
@@ -306,4 +335,111 @@ export class AppShell {
     private renderToggleIcon(): string {
         return this.controlsExpanded ? toggleCollapseIcon : toggleExpandIcon;
     }
+
+    private buildSourcePreviewUrl(source: RasterSourceConfig): string {
+        const [z, x, y] = source.example_zxy;
+        const template = source.tiles[0] ?? '';
+
+        // The preview is derived from the actual tile template so the menu
+        // stays in sync with the underlying layer configuration.
+        return template
+            .replace('{z}', String(z))
+            .replace('{x}', String(x))
+            .replace('{y}', String(y));
+    }
+
+    private renderLayersPopover(): string {
+        return `
+            <div
+                id="map-layers-popover"
+                class="layers-popover ${this.layersMenuOpen ? 'is-open' : ''}"
+                aria-hidden="${this.layersMenuOpen ? 'false' : 'true'}"
+            >
+                <div class="layers-popover__header">Layers</div>
+                <div class="layers-popover__list" role="menu" aria-label="Available layers">
+                    ${SOURCES_RASTER.map((source) => `
+                        <button
+                            class="layers-popover__option ${source.id === this.activeRasterSourceId ? 'is-active' : ''}"
+                            type="button"
+                            data-source-id="${source.id}"
+                            role="menuitemradio"
+                            aria-checked="${source.id === this.activeRasterSourceId ? 'true' : 'false'}"
+                        >
+                            <img
+                                class="layers-popover__preview"
+                                src="${this.buildSourcePreviewUrl(source)}"
+                                alt=""
+                                loading="lazy"
+                                decoding="async"
+                                crossorigin="anonymous"
+                            >
+                            <span class="layers-popover__option-copy">
+                                <span class="layers-popover__option-label">${source.layerId}</span>
+                                <span class="layers-popover__option-meta">${source.attribution || 'No attribution'}</span>
+                            </span>
+                        </button>
+                    `).join('')}
+                </div>
+            </div>
+        `;
+    }
+
+    private bindLayersPopoverEvents(): void {
+        const optionButtons = this.container.querySelectorAll<HTMLButtonElement>('.layers-popover__option');
+
+        optionButtons.forEach((button) => {
+            button.addEventListener('click', async () => {
+                const sourceId = button.dataset.sourceId;
+                if (!sourceId || !this.mapController) {
+                    return;
+                }
+
+                await this.mapController.setRasterSource(sourceId);
+                this.layersMenuOpen = false;
+                this.syncLayersMenuVisibility();
+            });
+        });
+    }
+
+    private syncLayersMenuVisibility(): void {
+        const popover = this.container.querySelector<HTMLElement>('#map-layers-popover');
+
+        if (!popover) {
+            return;
+        }
+
+        popover.classList.toggle('is-open', this.layersMenuOpen);
+        popover.setAttribute('aria-hidden', this.layersMenuOpen ? 'false' : 'true');
+    }
+
+    private syncLayersMenuSelection(): void {
+        const optionButtons = this.container.querySelectorAll<HTMLButtonElement>('.layers-popover__option');
+
+        optionButtons.forEach((button) => {
+            const isActive = button.dataset.sourceId === this.activeRasterSourceId;
+            button.classList.toggle('is-active', isActive);
+            button.setAttribute('aria-checked', isActive ? 'true' : 'false');
+        });
+    }
+
+    private readonly handleDocumentClick = (event: MouseEvent): void => {
+        if (!this.layersMenuOpen) {
+            return;
+        }
+
+        const target = event.target;
+        if (!(target instanceof Node)) {
+            return;
+        }
+
+        const popover = this.container.querySelector<HTMLElement>('#map-layers-popover');
+        const trigger = this.container.querySelector<HTMLButtonElement>('#map-layers-button');
+
+        if (popover?.contains(target) || trigger?.contains(target)) {
+            return;
+        }
+
+        this.layersMenuOpen = false;
+        this.syncLayersMenuVisibility();
+    };
 }

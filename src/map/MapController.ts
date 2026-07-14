@@ -1,6 +1,6 @@
 import maplibregl, { type Map } from 'maplibre-gl';
 
-import { DEFAULT_RASTER_SOURCE } from './sources';
+import { DEFAULT_RASTER_SOURCE, SOURCES_RASTER, type RasterSourceConfig } from './sources';
 
 export class MapController {
     private readonly container: HTMLElement;
@@ -9,6 +9,8 @@ export class MapController {
     private readonly mapReadyPromise: Promise<void>;
     private resolveMapReady: (() => void) | null;
     private readonly bearingChangeListeners: Array<(bearing: number) => void>;
+    private readonly activeSourceChangeListeners: Array<(source: RasterSourceConfig) => void>;
+    private activeRasterSource: RasterSourceConfig;
 
     constructor(container: HTMLElement) {
         this.container = container;
@@ -16,6 +18,8 @@ export class MapController {
         this.userLocationMarker = null;
         this.resolveMapReady = null;
         this.bearingChangeListeners = [];
+        this.activeSourceChangeListeners = [];
+        this.activeRasterSource = DEFAULT_RASTER_SOURCE;
         this.mapReadyPromise = new Promise((resolve) => {
             this.resolveMapReady = resolve;
         });
@@ -44,22 +48,12 @@ export class MapController {
                 return;
             }
 
-            this.map.addSource(DEFAULT_RASTER_SOURCE.id, {
-                type: 'raster',
-                tiles: [...DEFAULT_RASTER_SOURCE.tiles],
-                tileSize: DEFAULT_RASTER_SOURCE.tileSize,
-                attribution: DEFAULT_RASTER_SOURCE.attribution
-            });
-
-            this.map.addLayer({
-                id: DEFAULT_RASTER_SOURCE.layerId,
-                type: 'raster',
-                source: DEFAULT_RASTER_SOURCE.id
-            });
+            this.applyRasterSource(this.activeRasterSource);
 
             this.resolveMapReady?.();
             this.resolveMapReady = null;
             this.notifyBearingChange();
+            this.notifyActiveSourceChange();
         });
 
         // The shell needs to know when the map is rotated so it can surface a
@@ -83,6 +77,29 @@ export class MapController {
             duration: 250,
             essential: true
         });
+    }
+
+    public onActiveSourceChange(listener: (source: RasterSourceConfig) => void): void {
+        this.activeSourceChangeListeners.push(listener);
+        listener(this.activeRasterSource);
+    }
+
+    public async setRasterSource(sourceId: string): Promise<void> {
+        await this.mapReadyPromise;
+
+        const nextSource = SOURCES_RASTER.find((source) => source.id === sourceId);
+        if (!nextSource || !this.map) {
+            return;
+        }
+
+        this.activeRasterSource = nextSource;
+
+        // Clear all known base raster layers before adding the next one. This
+        // is more robust than only removing the previously tracked source,
+        // because it guarantees the style cannot drift into a stacked state.
+        this.removeAllRasterSources();
+        this.applyRasterSource(nextSource);
+        this.notifyActiveSourceChange();
     }
 
     public async zoomToUserPosition(): Promise<void> {
@@ -140,10 +157,53 @@ export class MapController {
             .addTo(this.map);
     }
 
+    private applyRasterSource(source: RasterSourceConfig): void {
+        if (!this.map) {
+            return;
+        }
+
+        this.map.addSource(source.id, {
+            type: 'raster',
+            tiles: [...source.tiles],
+            tileSize: source.tileSize,
+            attribution: source.attribution
+        });
+
+        this.map.addLayer({
+            id: source.layerId,
+            type: 'raster',
+            source: source.id
+        });
+    }
+
+    private removeAllRasterSources(): void {
+        if (!this.map) {
+            return;
+        }
+
+        SOURCES_RASTER.forEach((source) => {
+            if (this.map?.getLayer(source.layerId)) {
+                this.map.removeLayer(source.layerId);
+            }
+        });
+
+        SOURCES_RASTER.forEach((source) => {
+            if (this.map?.getSource(source.id)) {
+                this.map.removeSource(source.id);
+            }
+        });
+    }
+
     private notifyBearingChange(): void {
         const bearing = this.getNormalizedBearing();
         this.bearingChangeListeners.forEach((listener) => {
             listener(bearing);
+        });
+    }
+
+    private notifyActiveSourceChange(): void {
+        this.activeSourceChangeListeners.forEach((listener) => {
+            listener(this.activeRasterSource);
         });
     }
 

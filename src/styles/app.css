@@ -108,6 +108,102 @@ body {
     align-items: center;
 }
 
+.layers-popover {
+    position: absolute;
+    right: 54px;
+    bottom: 50px;
+    z-index: 3;
+    display: flex;
+    flex-direction: column;
+    width: 260px;
+    max-height: calc(100dvh - var(--safe-area-top) - var(--safe-area-bottom) - 24px);
+    padding: 10px;
+    border-radius: 10px;
+    background: rgba(20, 28, 24, 0.96);
+    color: var(--control-text-color);
+    opacity: 0;
+    transform: translateY(8px) scale(0.98);
+    pointer-events: none;
+    box-shadow: 0 18px 48px rgba(0, 0, 0, 0.28);
+    transition: opacity 140ms ease, transform 140ms ease;
+}
+
+.layers-popover.is-open {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+    pointer-events: auto;
+}
+
+.layers-popover__header {
+    margin-bottom: 8px;
+    font-size: 12px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: rgba(247, 250, 248, 0.72);
+}
+
+.layers-popover__list {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    min-height: 0;
+    overflow-y: auto;
+}
+
+.layers-popover__option {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    width: 100%;
+    padding: 8px;
+    border: 0;
+    border-radius: 8px;
+    background: rgba(255, 255, 255, 0.06);
+    color: inherit;
+    text-align: left;
+    cursor: pointer;
+    transition: background 140ms ease, transform 140ms ease;
+}
+
+.layers-popover__option:hover {
+    background: rgba(255, 255, 255, 0.1);
+}
+
+.layers-popover__option.is-active {
+    background: rgba(113, 196, 147, 0.18);
+    outline: 1px solid rgba(113, 196, 147, 0.45);
+}
+
+.layers-popover__preview {
+    flex: 0 0 56px;
+    width: 56px;
+    height: 56px;
+    border-radius: 6px;
+    object-fit: cover;
+    background: rgba(255, 255, 255, 0.08);
+}
+
+.layers-popover__option-copy {
+    display: flex;
+    flex: 1;
+    min-width: 0;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 2px;
+}
+
+.layers-popover__option-label {
+    font-size: 13px;
+    font-weight: 600;
+}
+
+.layers-popover__option-meta {
+    font-size: 11px;
+    line-height: 1.35;
+    color: rgba(247, 250, 248, 0.62);
+}
+
 .map-overlay-cluster.is-collapsed .map-secondary-controls {
     grid-template-rows: 0fr;
     margin-top: 0;
