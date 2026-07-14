@@ -143,8 +143,43 @@ body {
     color: rgba(247, 250, 248, 0.72);
 }
 
+.layers-popover__tabs {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 6px;
+    margin-bottom: 8px;
+}
+
+.layers-popover__tab {
+    padding: 8px 10px;
+    border: 0;
+    border-radius: 8px;
+    background: rgba(255, 255, 255, 0.06);
+    color: rgba(247, 250, 248, 0.72);
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background 140ms ease, color 140ms ease;
+}
+
+.layers-popover__tab.is-active {
+    background: rgba(113, 196, 147, 0.18);
+    color: var(--control-text-color);
+}
+
+.layers-popover__panel {
+    display: none;
+    min-height: 0;
+}
+
+.layers-popover__panel.is-active {
+    display: flex;
+    flex: 1;
+}
+
 .layers-popover__list {
     display: flex;
+    flex: 1;
     flex-direction: column;
     gap: 6px;
     min-height: 0;
