@@ -204,6 +204,7 @@ export class MapController {
             tileSize: source.tileSize,
             minzoom: source.zlims[0],
             maxzoom: source.zlims[1],
+            bounds: source.bounds || [-180,-85.051129,180,85.051129],
             attribution: source.attribution
         });
 
