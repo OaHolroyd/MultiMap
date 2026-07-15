@@ -19,7 +19,7 @@ export class MapController {
     private activeRasterSource: RasterSourceConfig;
     private activeOverlayIds: string[];
 
-    constructor(container: HTMLElement) {
+    constructor(container: HTMLElement, initialRasterSourceId: string = DEFAULT_RASTER_SOURCE.id) {
         this.container = container;
         this.map = null;
         this.userLocationMarker = null;
@@ -27,7 +27,7 @@ export class MapController {
         this.bearingChangeListeners = [];
         this.activeSourceChangeListeners = [];
         this.activeOverlayChangeListeners = [];
-        this.activeRasterSource = DEFAULT_RASTER_SOURCE;
+        this.activeRasterSource = this.resolveRasterSource(initialRasterSourceId);
         this.activeOverlayIds = [];
         this.mapReadyPromise = new Promise((resolve) => {
             this.resolveMapReady = resolve;
@@ -138,6 +138,41 @@ export class MapController {
         this.notifyActiveOverlayChange();
     }
 
+    public async setOverlaySources(sourceIds: readonly string[]): Promise<void> {
+        await this.mapReadyPromise;
+
+        if (!this.map) {
+            return;
+        }
+
+        const nextOverlayIds = sourceIds.filter((sourceId) =>
+            SOURCES_RASTER_OVERLAYS.some((source) => source.id === sourceId)
+        );
+
+        // Removing stale overlays before adding new ones keeps the map style in
+        // sync with the requested overlay set without disturbing base layers.
+        this.activeOverlayIds
+            .filter((sourceId) => !nextOverlayIds.includes(sourceId))
+            .forEach((sourceId) => {
+                const source = SOURCES_RASTER_OVERLAYS.find((overlay) => overlay.id === sourceId);
+                if (source) {
+                    this.removeRasterSource(source);
+                }
+            });
+
+        nextOverlayIds
+            .filter((sourceId) => !this.activeOverlayIds.includes(sourceId))
+            .forEach((sourceId) => {
+                const source = SOURCES_RASTER_OVERLAYS.find((overlay) => overlay.id === sourceId);
+                if (source) {
+                    this.applyRasterSource(source);
+                }
+            });
+
+        this.activeOverlayIds = [...nextOverlayIds];
+        this.notifyActiveOverlayChange();
+    }
+
     public async zoomToUserPosition(): Promise<void> {
         if (!('geolocation' in navigator)) {
             throw new Error('Geolocation is not available in this browser.');
@@ -244,6 +279,10 @@ export class MapController {
         SOURCES_RASTER.forEach((source) => {
             this.removeRasterSource(source);
         });
+    }
+
+    private resolveRasterSource(sourceId: string): RasterSourceConfig {
+        return SOURCES_RASTER.find((source) => source.id === sourceId) ?? DEFAULT_RASTER_SOURCE;
     }
 
     private notifyBearingChange(): void {

@@ -4,6 +4,12 @@ import {
     SOURCES_RASTER_OVERLAYS,
     type RasterSourceConfig
 } from '../map/sources';
+import { loadSettings, saveSettings } from '../settings/storage';
+import {
+    getInitialBaseLayerId,
+    type AppSettings,
+    type SettingsPopoverTab
+} from '../settings/settings';
 import compassIcon from '../assets/compass.svg?raw';
 import downloadIcon from '../assets/download.svg?raw';
 import layersIcon from '../assets/layers.svg?raw';
@@ -94,9 +100,12 @@ export class AppShell {
     private controlsExpanded: boolean;
     private northResetVisible: boolean;
     private layersMenuOpen: boolean;
+    private settingsMenuOpen: boolean;
     private activeRasterSourceId: string;
     private activeOverlayIds: string[];
     private layersPopoverTab: LayersPopoverTab;
+    private settingsPopoverTab: SettingsPopoverTab;
+    private settings: AppSettings;
 
     constructor(container: HTMLElement) {
         this.container = container;
@@ -104,9 +113,12 @@ export class AppShell {
         this.controlsExpanded = true;
         this.northResetVisible = false;
         this.layersMenuOpen = false;
-        this.activeRasterSourceId = SOURCES_RASTER[0]?.id ?? '';
+        this.settingsMenuOpen = false;
+        this.settings = loadSettings();
+        this.activeRasterSourceId = getInitialBaseLayerId(this.settings);
         this.activeOverlayIds = [];
         this.layersPopoverTab = 'base';
+        this.settingsPopoverTab = 'layers';
     }
 
     public init(): void {
@@ -157,6 +169,7 @@ export class AppShell {
                         ${locateIcon}
                     </button>
                     ${this.renderLayersPopover()}
+                    ${this.renderSettingsPopover()}
                     ${this.renderCollapsibleControls(BOTTOM_RIGHT_CONTROLS)}
                 </div>
             </div>
@@ -172,7 +185,7 @@ export class AppShell {
 
         // The shell owns the page structure, while the controller owns the
         // MapLibre instance and future map-specific behaviors.
-        this.mapController = new MapController(mapRoot);
+        this.mapController = new MapController(mapRoot, this.activeRasterSourceId);
         this.mapController.init();
         this.mapController.onBearingChange((bearing) => {
             this.syncNorthResetButton(bearing);
@@ -192,9 +205,9 @@ export class AppShell {
         const resetBearingButton = this.container.querySelector<HTMLButtonElement>('#map-reset-bearing-button');
         const locateButton = this.container.querySelector<HTMLButtonElement>('#map-locate-button');
         const layersButton = this.container.querySelector<HTMLButtonElement>('#map-layers-button');
+        const settingsButton = this.container.querySelector<HTMLButtonElement>('#map-settings-button');
         const layersPopover = this.container.querySelector<HTMLElement>('#map-layers-popover');
-        const baseTabButton = this.container.querySelector<HTMLButtonElement>('#layers-tab-base');
-        const overlaysTabButton = this.container.querySelector<HTMLButtonElement>('#layers-tab-overlays');
+        const settingsPopover = this.container.querySelector<HTMLElement>('#map-settings-popover');
 
         toggleButton?.addEventListener('click', () => {
             this.controlsExpanded = !this.controlsExpanded;
@@ -225,25 +238,30 @@ export class AppShell {
 
         layersButton?.addEventListener('click', (event) => {
             event.stopPropagation();
+            this.settingsMenuOpen = false;
+            this.syncSettingsMenuVisibility();
             this.layersMenuOpen = !this.layersMenuOpen;
             this.syncLayersMenuVisibility();
         });
 
+        settingsButton?.addEventListener('click', (event) => {
+            event.stopPropagation();
+            this.layersMenuOpen = false;
+            this.syncLayersMenuVisibility();
+            this.settingsMenuOpen = !this.settingsMenuOpen;
+            this.syncSettingsMenuVisibility();
+        });
+
         layersPopover?.addEventListener('click', (event) => {
             event.stopPropagation();
+            this.handleLayersPopoverClick(event);
         });
 
-        baseTabButton?.addEventListener('click', () => {
-            this.layersPopoverTab = 'base';
-            this.syncLayersPopoverTab();
+        settingsPopover?.addEventListener('click', (event) => {
+            event.stopPropagation();
+            this.handleSettingsPopoverClick(event);
         });
 
-        overlaysTabButton?.addEventListener('click', () => {
-            this.layersPopoverTab = 'overlays';
-            this.syncLayersPopoverTab();
-        });
-
-        this.bindLayersPopoverEvents();
         this.bindPlaceholderControlHandlers();
         document.addEventListener('click', this.handleDocumentClick);
     }
@@ -265,6 +283,11 @@ export class AppShell {
         if (!this.controlsExpanded && this.layersMenuOpen) {
             this.layersMenuOpen = false;
             this.syncLayersMenuVisibility();
+        }
+
+        if (!this.controlsExpanded && this.settingsMenuOpen) {
+            this.settingsMenuOpen = false;
+            this.syncSettingsMenuVisibility();
         }
 
         collapsibleSections.forEach((section) => {
@@ -308,7 +331,9 @@ export class AppShell {
         const placeholderControls = [
             ...TOP_LEFT_CONTROLS,
             ...TOP_RIGHT_CONTROLS,
-            ...BOTTOM_RIGHT_CONTROLS.filter((control) => control.id !== 'map-layers-button')
+            ...BOTTOM_RIGHT_CONTROLS.filter((control) =>
+                !['map-layers-button', 'map-settings-button'].includes(control.id)
+            )
         ];
 
         // Centralizing the placeholder bindings keeps the shell readable now,
@@ -379,7 +404,7 @@ export class AppShell {
         return `
             <div
                 id="map-layers-popover"
-                class="layers-popover ${this.layersMenuOpen ? 'is-open' : ''}"
+                class="map-popover layers-popover ${this.layersMenuOpen ? 'is-open' : ''}"
                 aria-hidden="${this.layersMenuOpen ? 'false' : 'true'}"
             >
                 <div class="layers-popover__header">Layers</div>
@@ -409,8 +434,13 @@ export class AppShell {
                     role="tabpanel"
                     aria-hidden="${this.layersPopoverTab === 'base' ? 'false' : 'true'}"
                 >
-                    <div class="layers-popover__list" role="menu" aria-label="Available base layers">
-                        ${this.renderSourceOptions(SOURCES_RASTER, 'base')}
+                    <div
+                        id="layers-popover-base-list"
+                        class="layers-popover__list"
+                        role="menu"
+                        aria-label="Available base layers"
+                    >
+                        ${this.renderSourceOptions(this.getEnabledBaseSources(), 'base')}
                     </div>
                 </div>
                 <div
@@ -419,35 +449,64 @@ export class AppShell {
                     role="tabpanel"
                     aria-hidden="${this.layersPopoverTab === 'overlays' ? 'false' : 'true'}"
                 >
-                    <div class="layers-popover__list" role="menu" aria-label="Available overlays">
-                        ${this.renderSourceOptions(SOURCES_RASTER_OVERLAYS, 'overlay')}
+                    <div
+                        id="layers-popover-overlay-list"
+                        class="layers-popover__list"
+                        role="menu"
+                        aria-label="Available overlays"
+                    >
+                        ${this.renderSourceOptions(this.getEnabledOverlaySources(), 'overlay')}
                     </div>
                 </div>
             </div>
         `;
     }
 
-    private bindLayersPopoverEvents(): void {
-        const optionButtons = this.container.querySelectorAll<HTMLButtonElement>('.layers-popover__option');
-
-        optionButtons.forEach((button) => {
-            button.addEventListener('click', async () => {
-                const sourceId = button.dataset.sourceId;
-                const sourceKind = button.dataset.sourceKind;
-                if (!sourceId || !this.mapController) {
-                    return;
-                }
-
-                if (sourceKind === 'overlay') {
-                    await this.mapController.toggleOverlaySource(sourceId);
-                    return;
-                }
-
-                await this.mapController.setRasterSource(sourceId);
-                this.layersMenuOpen = false;
-                this.syncLayersMenuVisibility();
-            });
-        });
+    private renderSettingsPopover(): string {
+        return `
+            <div
+                id="map-settings-popover"
+                class="map-popover settings-popover ${this.settingsMenuOpen ? 'is-open' : ''}"
+                aria-hidden="${this.settingsMenuOpen ? 'false' : 'true'}"
+            >
+                <div class="layers-popover__header">Settings</div>
+                <div class="settings-popover__tabs" role="tablist" aria-label="Settings sections">
+                    ${this.renderSettingsTabButton('general', settingsIcon, 'General settings')}
+                    ${this.renderSettingsTabButton('layers', layersIcon, 'Layer settings')}
+                    ${this.renderSettingsTabButton('routes', routesIcon, 'Route settings')}
+                    ${this.renderSettingsTabButton('downloads', downloadIcon, 'Download settings')}
+                </div>
+                ${this.renderSettingsPopoverPanel('general', `
+                    <div class="settings-popover__placeholder">
+                        General settings will be added here.
+                    </div>
+                `)}
+                ${this.renderSettingsPopoverPanel('layers', `
+                    <div class="settings-popover__section">
+                        <div class="settings-popover__section-label">Base layers</div>
+                        <div id="settings-base-layer-list" class="settings-popover__list">
+                            ${this.renderSettingsSourceAvailabilityOptions(SOURCES_RASTER, 'base')}
+                        </div>
+                    </div>
+                    <div class="settings-popover__section">
+                        <div class="settings-popover__section-label">Overlays</div>
+                        <div id="settings-overlay-layer-list" class="settings-popover__list">
+                            ${this.renderSettingsSourceAvailabilityOptions(SOURCES_RASTER_OVERLAYS, 'overlay')}
+                        </div>
+                    </div>
+                `)}
+                ${this.renderSettingsPopoverPanel('routes', `
+                    <div class="settings-popover__placeholder">
+                        Route settings will be added here.
+                    </div>
+                `)}
+                ${this.renderSettingsPopoverPanel('downloads', `
+                    <div class="settings-popover__placeholder">
+                        Download settings will be added here.
+                    </div>
+                `)}
+            </div>
+        `;
     }
 
     private syncLayersMenuVisibility(): void {
@@ -460,6 +519,7 @@ export class AppShell {
         popover.classList.toggle('is-open', this.layersMenuOpen);
         popover.setAttribute('aria-hidden', this.layersMenuOpen ? 'false' : 'true');
         this.syncLayersPopoverTab();
+        this.refreshLayerSelectionMenu();
     }
 
     private syncLayersPopoverTab(): void {
@@ -490,6 +550,36 @@ export class AppShell {
                 : sourceId === this.activeRasterSourceId;
             button.classList.toggle('is-active', isActive);
             button.setAttribute('aria-checked', isActive ? 'true' : 'false');
+        });
+    }
+
+    private syncSettingsMenuVisibility(): void {
+        const popover = this.container.querySelector<HTMLElement>('#map-settings-popover');
+
+        if (!popover) {
+            return;
+        }
+
+        popover.classList.toggle('is-open', this.settingsMenuOpen);
+        popover.setAttribute('aria-hidden', this.settingsMenuOpen ? 'false' : 'true');
+        this.syncSettingsPopoverTab();
+        this.refreshSettingsLayersPanel();
+    }
+
+    private syncSettingsPopoverTab(): void {
+        const tabButtons = this.container.querySelectorAll<HTMLButtonElement>('.settings-popover__tab');
+        const panels = this.container.querySelectorAll<HTMLElement>('.settings-popover__panel');
+
+        tabButtons.forEach((button) => {
+            const isActive = button.dataset.panel === this.settingsPopoverTab;
+            button.classList.toggle('is-active', isActive);
+            button.setAttribute('aria-selected', isActive ? 'true' : 'false');
+        });
+
+        panels.forEach((panel) => {
+            const isActive = panel.dataset.panel === this.settingsPopoverTab;
+            panel.classList.toggle('is-active', isActive);
+            panel.setAttribute('aria-hidden', isActive ? 'false' : 'true');
         });
     }
 
@@ -529,8 +619,253 @@ export class AppShell {
         }).join('');
     }
 
+    private renderSettingsTabButton(
+        tab: SettingsPopoverTab,
+        icon: string,
+        label: string
+    ): string {
+        const isActive = this.settingsPopoverTab === tab;
+
+        return `
+            <button
+                class="settings-popover__tab ${isActive ? 'is-active' : ''}"
+                type="button"
+                data-panel="${tab}"
+                role="tab"
+                aria-label="${label}"
+                aria-selected="${isActive ? 'true' : 'false'}"
+                title="${label}"
+            >
+                ${icon}
+            </button>
+        `;
+    }
+
+    private renderSettingsPopoverPanel(tab: SettingsPopoverTab, content: string): string {
+        const isActive = this.settingsPopoverTab === tab;
+
+        return `
+            <div
+                class="settings-popover__panel ${isActive ? 'is-active' : ''}"
+                data-panel="${tab}"
+                role="tabpanel"
+                aria-hidden="${isActive ? 'false' : 'true'}"
+            >
+                ${content}
+            </div>
+        `;
+    }
+
+    private renderSettingsSourceAvailabilityOptions(
+        sources: readonly RasterSourceConfig[],
+        sourceKind: 'base' | 'overlay'
+    ): string {
+        const enabledIds = sourceKind === 'base'
+            ? this.settings.enabledBaseLayerIds
+            : this.settings.enabledOverlayIds;
+        const lastEnabledBaseId = sourceKind === 'base' && enabledIds.length === 1
+            ? enabledIds[0]
+            : null;
+
+        return sources.map((source) => {
+            const isEnabled = enabledIds.includes(source.id);
+            const isRequiredBase = sourceKind === 'base' && lastEnabledBaseId === source.id;
+
+            return `
+                <button
+                    class="settings-popover__option ${isEnabled ? 'is-enabled' : 'is-disabled'}"
+                    type="button"
+                    data-settings-source-id="${source.id}"
+                    data-settings-source-kind="${sourceKind}"
+                    aria-pressed="${isEnabled ? 'true' : 'false'}"
+                    ${isRequiredBase ? 'disabled' : ''}
+                >
+                    <img
+                        class="layers-popover__preview"
+                        src="${this.buildSourcePreviewUrl(source)}"
+                        alt=""
+                        loading="lazy"
+                        decoding="async"
+                        crossorigin="anonymous"
+                    >
+                    <span class="layers-popover__option-copy">
+                        <span class="layers-popover__option-label">${source.layerId}</span>
+                        <span class="layers-popover__option-meta">${source.attribution || 'No attribution'}</span>
+                    </span>
+                </button>
+            `;
+        }).join('');
+    }
+
+    private readonly handleLayersPopoverClick = async (event: MouseEvent): Promise<void> => {
+        const target = event.target;
+        if (!(target instanceof Element)) {
+            return;
+        }
+
+        const tabButton = target.closest<HTMLButtonElement>('.layers-popover__tab');
+        if (tabButton) {
+            this.layersPopoverTab = tabButton.id === 'layers-tab-overlays' ? 'overlays' : 'base';
+            this.syncLayersPopoverTab();
+            return;
+        }
+
+        const optionButton = target.closest<HTMLButtonElement>('.layers-popover__option');
+        if (!optionButton || !this.mapController) {
+            return;
+        }
+
+        const sourceId = optionButton.dataset.sourceId;
+        const sourceKind = optionButton.dataset.sourceKind;
+        if (!sourceId) {
+            return;
+        }
+
+        if (sourceKind === 'overlay') {
+            await this.mapController.toggleOverlaySource(sourceId);
+            return;
+        }
+
+        await this.mapController.setRasterSource(sourceId);
+        this.layersMenuOpen = false;
+        this.syncLayersMenuVisibility();
+    };
+
+    private readonly handleSettingsPopoverClick = async (event: MouseEvent): Promise<void> => {
+        const target = event.target;
+        if (!(target instanceof Element)) {
+            return;
+        }
+
+        const tabButton = target.closest<HTMLButtonElement>('.settings-popover__tab');
+        if (tabButton) {
+            const nextTab = tabButton.dataset.panel;
+            if (nextTab === 'general' || nextTab === 'layers' || nextTab === 'routes' || nextTab === 'downloads') {
+                this.settingsPopoverTab = nextTab;
+                this.syncSettingsPopoverTab();
+            }
+            return;
+        }
+
+        const optionButton = target.closest<HTMLButtonElement>('.settings-popover__option');
+        if (!optionButton) {
+            return;
+        }
+
+        const sourceId = optionButton.dataset.settingsSourceId;
+        const sourceKind = optionButton.dataset.settingsSourceKind;
+        if (!sourceId || (sourceKind !== 'base' && sourceKind !== 'overlay')) {
+            return;
+        }
+
+        await this.toggleLayerAvailability(sourceId, sourceKind);
+    };
+
+    private async toggleLayerAvailability(
+        sourceId: string,
+        sourceKind: 'base' | 'overlay'
+    ): Promise<void> {
+        const nextSettings = sourceKind === 'base'
+            ? this.buildNextBaseLayerSettings(sourceId)
+            : this.buildNextOverlaySettings(sourceId);
+
+        if (!nextSettings) {
+            return;
+        }
+
+        this.settings = nextSettings;
+        saveSettings(nextSettings);
+
+        // If the user hides the active base layer, switch immediately to the
+        // next available one so the map and the layer picker cannot diverge.
+        if (
+            sourceKind === 'base' &&
+            !nextSettings.enabledBaseLayerIds.includes(this.activeRasterSourceId)
+        ) {
+            const fallbackSourceId = nextSettings.enabledBaseLayerIds[0];
+            if (fallbackSourceId) {
+                this.activeRasterSourceId = fallbackSourceId;
+                await this.mapController?.setRasterSource(fallbackSourceId);
+            }
+        }
+
+        if (sourceKind === 'overlay') {
+            const enabledOverlayIds = this.activeOverlayIds.filter((overlayId) =>
+                nextSettings.enabledOverlayIds.includes(overlayId)
+            );
+            await this.mapController?.setOverlaySources(enabledOverlayIds);
+        }
+
+        this.refreshLayerSelectionMenu();
+        this.refreshSettingsLayersPanel();
+    }
+
+    private buildNextBaseLayerSettings(sourceId: string): AppSettings | null {
+        const enabledBaseLayerIds = this.settings.enabledBaseLayerIds.includes(sourceId)
+            ? this.settings.enabledBaseLayerIds.filter((id) => id !== sourceId)
+            : [...this.settings.enabledBaseLayerIds, sourceId];
+
+        if (enabledBaseLayerIds.length === 0) {
+            return null;
+        }
+
+        return {
+            ...this.settings,
+            enabledBaseLayerIds
+        };
+    }
+
+    private buildNextOverlaySettings(sourceId: string): AppSettings {
+        const enabledOverlayIds = this.settings.enabledOverlayIds.includes(sourceId)
+            ? this.settings.enabledOverlayIds.filter((id) => id !== sourceId)
+            : [...this.settings.enabledOverlayIds, sourceId];
+
+        return {
+            ...this.settings,
+            enabledOverlayIds
+        };
+    }
+
+    private refreshLayerSelectionMenu(): void {
+        const baseList = this.container.querySelector<HTMLElement>('#layers-popover-base-list');
+        const overlayList = this.container.querySelector<HTMLElement>('#layers-popover-overlay-list');
+
+        if (baseList) {
+            baseList.innerHTML = this.renderSourceOptions(this.getEnabledBaseSources(), 'base');
+        }
+
+        if (overlayList) {
+            overlayList.innerHTML = this.renderSourceOptions(this.getEnabledOverlaySources(), 'overlay');
+        }
+
+        this.syncLayersMenuSelection();
+    }
+
+    private refreshSettingsLayersPanel(): void {
+        const baseList = this.container.querySelector<HTMLElement>('#settings-base-layer-list');
+        const overlayList = this.container.querySelector<HTMLElement>('#settings-overlay-layer-list');
+
+        if (baseList) {
+            baseList.innerHTML = this.renderSettingsSourceAvailabilityOptions(SOURCES_RASTER, 'base');
+        }
+
+        if (overlayList) {
+            overlayList.innerHTML = this.renderSettingsSourceAvailabilityOptions(SOURCES_RASTER_OVERLAYS, 'overlay');
+        }
+    }
+
+    private getEnabledBaseSources(): RasterSourceConfig[] {
+        const enabledIds = new Set(this.settings.enabledBaseLayerIds);
+        return SOURCES_RASTER.filter((source) => enabledIds.has(source.id));
+    }
+
+    private getEnabledOverlaySources(): RasterSourceConfig[] {
+        const enabledIds = new Set(this.settings.enabledOverlayIds);
+        return SOURCES_RASTER_OVERLAYS.filter((source) => enabledIds.has(source.id));
+    }
+
     private readonly handleDocumentClick = (event: MouseEvent): void => {
-        if (!this.layersMenuOpen) {
+        if (!this.layersMenuOpen && !this.settingsMenuOpen) {
             return;
         }
 
@@ -540,13 +875,22 @@ export class AppShell {
         }
 
         const popover = this.container.querySelector<HTMLElement>('#map-layers-popover');
+        const settingsPopover = this.container.querySelector<HTMLElement>('#map-settings-popover');
         const trigger = this.container.querySelector<HTMLButtonElement>('#map-layers-button');
+        const settingsTrigger = this.container.querySelector<HTMLButtonElement>('#map-settings-button');
 
-        if (popover?.contains(target) || trigger?.contains(target)) {
+        if (
+            popover?.contains(target) ||
+            trigger?.contains(target) ||
+            settingsPopover?.contains(target) ||
+            settingsTrigger?.contains(target)
+        ) {
             return;
         }
 
         this.layersMenuOpen = false;
         this.syncLayersMenuVisibility();
+        this.settingsMenuOpen = false;
+        this.syncSettingsMenuVisibility();
     };
 }

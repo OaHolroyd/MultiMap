@@ -108,14 +108,11 @@ body {
     align-items: center;
 }
 
-.layers-popover {
+.map-popover {
     position: absolute;
-    right: 54px;
-    bottom: 50px;
     z-index: 3;
     display: flex;
     flex-direction: column;
-    width: 260px;
     max-height: calc(100dvh - var(--safe-area-top) - var(--safe-area-bottom) - 24px);
     padding: 10px;
     border-radius: 10px;
@@ -128,10 +125,22 @@ body {
     transition: opacity 140ms ease, transform 140ms ease;
 }
 
-.layers-popover.is-open {
+.map-popover.is-open {
     opacity: 1;
     transform: translateY(0) scale(1);
     pointer-events: auto;
+}
+
+.layers-popover {
+    right: 54px;
+    bottom: 50px;
+    width: 260px;
+}
+
+.settings-popover {
+    right: 54px;
+    bottom: 0;
+    width: 320px;
 }
 
 .layers-popover__header {
@@ -175,6 +184,19 @@ body {
 .layers-popover__panel.is-active {
     display: flex;
     flex: 1;
+}
+
+.settings-popover__panel {
+    display: none;
+    min-height: 0;
+    overflow-y: auto;
+}
+
+.settings-popover__panel.is-active {
+    display: flex;
+    flex: 1;
+    flex-direction: column;
+    gap: 12px;
 }
 
 .layers-popover__list {
@@ -237,6 +259,103 @@ body {
     font-size: 11px;
     line-height: 1.35;
     color: rgba(247, 250, 248, 0.62);
+}
+
+.settings-popover__tabs {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 6px;
+    margin-bottom: 8px;
+}
+
+.settings-popover__tab {
+    display: grid;
+    place-items: center;
+    width: 100%;
+    min-height: 40px;
+    padding: 0;
+    border: 0;
+    border-radius: 8px;
+    background: rgba(255, 255, 255, 0.06);
+    color: rgba(247, 250, 248, 0.72);
+    cursor: pointer;
+    transition: background 140ms ease, color 140ms ease;
+}
+
+.settings-popover__tab.is-active {
+    background: rgba(113, 196, 147, 0.18);
+    color: var(--control-text-color);
+}
+
+.settings-popover__section {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.settings-popover__section-label {
+    font-size: 11px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: rgba(247, 250, 248, 0.62);
+}
+
+.settings-popover__list {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.settings-popover__option {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    width: 100%;
+    padding: 8px;
+    border: 0;
+    border-radius: 8px;
+    background: rgba(255, 255, 255, 0.06);
+    color: inherit;
+    text-align: left;
+    cursor: pointer;
+    transition: background 140ms ease, opacity 140ms ease;
+}
+
+.settings-popover__option.is-enabled {
+    background: rgba(113, 196, 147, 0.12);
+    box-shadow: inset 0 0 0 1px rgba(113, 196, 147, 0.6), 0 0 0 1px rgba(113, 196, 147, 0.18);
+}
+
+.settings-popover__option.is-disabled {
+    color: rgba(247, 250, 248, 0.5);
+}
+
+.settings-popover__option.is-disabled .layers-popover__option-label,
+.settings-popover__option.is-disabled .layers-popover__option-meta {
+    color: rgba(247, 250, 248, 0.48);
+}
+
+.settings-popover__option.is-disabled .layers-popover__preview {
+    opacity: 0.6;
+}
+
+.settings-popover__option:hover {
+    background: rgba(255, 255, 255, 0.1);
+}
+
+.settings-popover__option:disabled {
+    opacity: 0.6;
+    cursor: default;
+}
+
+.settings-popover__placeholder {
+    padding: 12px;
+    border-radius: 8px;
+    background: rgba(255, 255, 255, 0.06);
+    font-size: 13px;
+    line-height: 1.45;
+    color: rgba(247, 250, 248, 0.72);
 }
 
 .map-overlay-cluster.is-collapsed .map-secondary-controls {
