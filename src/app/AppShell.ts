@@ -4,9 +4,10 @@ import {
     SOURCES_RASTER_OVERLAYS,
     type RasterSourceConfig
 } from '../map/sources';
+import { loadLayerSelection, saveLayerSelection } from '../map/storage';
+import type { LayerSelectionState } from '../map/layerSelection';
 import { loadSettings, saveSettings } from '../settings/storage';
 import {
-    getInitialBaseLayerId,
     type AppSettings,
     type SettingsPopoverTab
 } from '../settings/settings';
@@ -106,6 +107,7 @@ export class AppShell {
     private layersPopoverTab: LayersPopoverTab;
     private settingsPopoverTab: SettingsPopoverTab;
     private settings: AppSettings;
+    private layerSelection: LayerSelectionState;
 
     constructor(container: HTMLElement) {
         this.container = container;
@@ -115,8 +117,9 @@ export class AppShell {
         this.layersMenuOpen = false;
         this.settingsMenuOpen = false;
         this.settings = loadSettings();
-        this.activeRasterSourceId = getInitialBaseLayerId(this.settings);
-        this.activeOverlayIds = [];
+        this.layerSelection = loadLayerSelection(this.settings);
+        this.activeRasterSourceId = this.layerSelection.activeBaseLayerId;
+        this.activeOverlayIds = [...this.layerSelection.activeOverlayIds];
         this.layersPopoverTab = 'base';
         this.settingsPopoverTab = 'layers';
     }
@@ -185,17 +188,23 @@ export class AppShell {
 
         // The shell owns the page structure, while the controller owns the
         // MapLibre instance and future map-specific behaviors.
-        this.mapController = new MapController(mapRoot, this.activeRasterSourceId);
+        this.mapController = new MapController(
+            mapRoot,
+            this.activeRasterSourceId,
+            this.activeOverlayIds
+        );
         this.mapController.init();
         this.mapController.onBearingChange((bearing) => {
             this.syncNorthResetButton(bearing);
         });
         this.mapController.onActiveSourceChange((source) => {
             this.activeRasterSourceId = source.id;
+            this.persistLayerSelection();
             this.syncLayersMenuSelection();
         });
         this.mapController.onActiveOverlaysChange((overlayIds) => {
             this.activeOverlayIds = [...overlayIds];
+            this.persistLayerSelection();
             this.syncLayersMenuSelection();
         });
     }
@@ -862,6 +871,14 @@ export class AppShell {
     private getEnabledOverlaySources(): RasterSourceConfig[] {
         const enabledIds = new Set(this.settings.enabledOverlayIds);
         return SOURCES_RASTER_OVERLAYS.filter((source) => enabledIds.has(source.id));
+    }
+
+    private persistLayerSelection(): void {
+        this.layerSelection = {
+            activeBaseLayerId: this.activeRasterSourceId,
+            activeOverlayIds: [...this.activeOverlayIds]
+        };
+        saveLayerSelection(this.layerSelection);
     }
 
     private readonly handleDocumentClick = (event: MouseEvent): void => {

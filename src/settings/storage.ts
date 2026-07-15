@@ -5,23 +5,16 @@ import {
     migrateStorageShape,
     type AppSettings
 } from './settings';
+import { loadStoredJson, saveStoredJson } from '../storage/localStorage';
 
 export function loadSettings(): AppSettings {
-    try {
-        const storedJson = localStorage.getItem(SETTINGS_STORAGE_KEY);
-        const savedData = storedJson ? JSON.parse(storedJson) : null;
-        const { data, didChange } = migrateStorageShape(savedData);
-
-        if (didChange) {
-            localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(data));
-        }
-
-        return data;
-    } catch {
-        return cloneSettings(DEFAULT_SETTINGS);
-    }
+    return loadStoredJson({
+        key: SETTINGS_STORAGE_KEY,
+        fallback: () => cloneSettings(DEFAULT_SETTINGS),
+        migrate: migrateStorageShape
+    });
 }
 
 export function saveSettings(savedData: AppSettings): void {
-    localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(savedData));
+    saveStoredJson(SETTINGS_STORAGE_KEY, savedData);
 }

@@ -19,7 +19,11 @@ export class MapController {
     private activeRasterSource: RasterSourceConfig;
     private activeOverlayIds: string[];
 
-    constructor(container: HTMLElement, initialRasterSourceId: string = DEFAULT_RASTER_SOURCE.id) {
+    constructor(
+        container: HTMLElement,
+        initialRasterSourceId: string = DEFAULT_RASTER_SOURCE.id,
+        initialOverlayIds: readonly string[] = []
+    ) {
         this.container = container;
         this.map = null;
         this.userLocationMarker = null;
@@ -28,7 +32,7 @@ export class MapController {
         this.activeSourceChangeListeners = [];
         this.activeOverlayChangeListeners = [];
         this.activeRasterSource = this.resolveRasterSource(initialRasterSourceId);
-        this.activeOverlayIds = [];
+        this.activeOverlayIds = this.resolveOverlayIds(initialOverlayIds);
         this.mapReadyPromise = new Promise((resolve) => {
             this.resolveMapReady = resolve;
         });
@@ -58,6 +62,12 @@ export class MapController {
             }
 
             this.applyRasterSource(this.activeRasterSource);
+            this.activeOverlayIds.forEach((overlayId) => {
+                const overlaySource = SOURCES_RASTER_OVERLAYS.find((source) => source.id === overlayId);
+                if (overlaySource) {
+                    this.applyRasterSource(overlaySource);
+                }
+            });
 
             this.resolveMapReady?.();
             this.resolveMapReady = null;
@@ -283,6 +293,19 @@ export class MapController {
 
     private resolveRasterSource(sourceId: string): RasterSourceConfig {
         return SOURCES_RASTER.find((source) => source.id === sourceId) ?? DEFAULT_RASTER_SOURCE;
+    }
+
+    private resolveOverlayIds(sourceIds: readonly string[]): string[] {
+        const validIds = new Set(SOURCES_RASTER_OVERLAYS.map((source) => source.id));
+        const uniqueIds = new Set<string>();
+
+        sourceIds.forEach((sourceId) => {
+            if (validIds.has(sourceId)) {
+                uniqueIds.add(sourceId);
+            }
+        });
+
+        return [...uniqueIds];
     }
 
     private notifyBearingChange(): void {

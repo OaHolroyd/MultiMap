@@ -3,6 +3,7 @@ import {
     SOURCES_RASTER,
     SOURCES_RASTER_OVERLAYS
 } from '../map/sources';
+import type { StorageMigrationResult } from '../storage/localStorage';
 
 export const SETTINGS_STORAGE_KEY = 'multimap.settings';
 
@@ -11,11 +12,6 @@ export type SettingsPopoverTab = 'general' | 'layers' | 'routes' | 'downloads';
 export interface AppSettings {
     readonly enabledBaseLayerIds: string[];
     readonly enabledOverlayIds: string[];
-}
-
-export interface MigratedSettingsResult {
-    readonly data: AppSettings;
-    readonly didChange: boolean;
 }
 
 const DEFAULT_BASE_LAYER_IDS = SOURCES_RASTER.map((source) => source.id);
@@ -33,7 +29,7 @@ export function cloneSettings(settings: AppSettings): AppSettings {
     };
 }
 
-export function migrateStorageShape(savedData: unknown): MigratedSettingsResult {
+export function migrateStorageShape(savedData: unknown): StorageMigrationResult<AppSettings> {
     const defaultSettings = cloneSettings(DEFAULT_SETTINGS);
 
     if (!isObject(savedData)) {
@@ -73,10 +69,6 @@ export function migrateStorageShape(savedData: unknown): MigratedSettingsResult 
         data: normalizedSettings,
         didChange
     };
-}
-
-export function getInitialBaseLayerId(settings: AppSettings): string {
-    return settings.enabledBaseLayerIds[0] ?? DEFAULT_RASTER_SOURCE.id;
 }
 
 function filterKnownIds(
