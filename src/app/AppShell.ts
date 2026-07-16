@@ -16,10 +16,12 @@ import { loadLayerSelection, saveLayerSelection } from '../map/storage';
 import type { LayerSelectionState } from '../map/layerSelection';
 import { loadSettings, saveSettings } from '../settings/storage';
 import {
+    type AppTheme,
     type AppSettings,
     type SettingsPopoverTab
 } from '../settings/settings';
 import compassIcon from '../assets/compass.svg?raw';
+import closeIcon from '../assets/close.svg?raw';
 import deleteIcon from '../assets/delete.svg?raw';
 import dragHandleIcon from '../assets/drag-handle.svg?raw';
 import downloadIcon from '../assets/download.svg?raw';
@@ -164,9 +166,11 @@ export class AppShell {
 
     public init(): void {
         this.render();
+        this.applyThemePreference(this.settings.theme);
         this.mountMap();
         this.bindEvents();
         this.syncLayersPopoverTab();
+        this.syncThemeSettingControls();
     }
 
     private render(): void {
@@ -175,6 +179,9 @@ export class AppShell {
                 <div id="map-root" class="map-root" aria-label="Map view"></div>
 
                 ${CONTROL_CLUSTERS.map((cluster) => this.renderCollapsibleCluster(cluster)).join('')}
+
+                ${this.renderLayersPopover()}
+                ${this.renderSettingsPopover()}
 
                 <div
                     class="map-overlay-cluster map-overlay-cluster--bottom-right ${this.controlsExpanded ? '' : 'is-collapsed'}"
@@ -209,8 +216,6 @@ export class AppShell {
                     >
                         ${locateIcon}
                     </button>
-                    ${this.renderLayersPopover()}
-                    ${this.renderSettingsPopover()}
                     ${this.renderCollapsibleControls(BOTTOM_RIGHT_CONTROLS)}
                 </div>
             </div>
@@ -255,8 +260,12 @@ export class AppShell {
         const settingsButton = this.container.querySelector<HTMLButtonElement>('#map-settings-button');
         const importLayersButton = this.container.querySelector<HTMLButtonElement>('#settings-import-layers-button');
         const importLayersInput = this.container.querySelector<HTMLInputElement>('#settings-import-layers-input');
+        const layersBackdrop = this.container.querySelector<HTMLElement>('#map-layers-backdrop');
+        const settingsBackdrop = this.container.querySelector<HTMLElement>('#map-settings-backdrop');
         const layersPopover = this.container.querySelector<HTMLElement>('#map-layers-popover');
         const settingsPopover = this.container.querySelector<HTMLElement>('#map-settings-popover');
+        const closeLayersButton = this.container.querySelector<HTMLButtonElement>('#map-layers-close-button');
+        const closeSettingsButton = this.container.querySelector<HTMLButtonElement>('#map-settings-close-button');
 
         toggleButton?.addEventListener('click', () => {
             this.controlsExpanded = !this.controlsExpanded;
@@ -301,6 +310,16 @@ export class AppShell {
             this.syncSettingsMenuVisibility();
         });
 
+        layersBackdrop?.addEventListener('click', () => {
+            this.layersMenuOpen = false;
+            this.syncLayersMenuVisibility();
+        });
+
+        settingsBackdrop?.addEventListener('click', () => {
+            this.settingsMenuOpen = false;
+            this.syncSettingsMenuVisibility();
+        });
+
         layersPopover?.addEventListener('click', (event) => {
             event.stopPropagation();
             this.handleLayersPopoverClick(event);
@@ -313,6 +332,16 @@ export class AppShell {
 
         settingsPopover?.addEventListener('pointerdown', (event) => {
             this.handleSettingsPointerDown(event);
+        });
+
+        closeLayersButton?.addEventListener('click', () => {
+            this.layersMenuOpen = false;
+            this.syncLayersMenuVisibility();
+        });
+
+        closeSettingsButton?.addEventListener('click', () => {
+            this.settingsMenuOpen = false;
+            this.syncSettingsMenuVisibility();
         });
 
         importLayersButton?.addEventListener('click', () => {
@@ -476,11 +505,33 @@ export class AppShell {
     private renderLayersPopover(): string {
         return `
             <div
+                id="map-layers-backdrop"
+                class="map-surface-backdrop map-surface-backdrop--layers ${this.layersMenuOpen ? 'is-open' : ''}"
+                aria-hidden="${this.layersMenuOpen ? 'false' : 'true'}"
+            ></div>
+            <div
                 id="map-layers-popover"
-                class="map-popover layers-popover ${this.layersMenuOpen ? 'is-open' : ''}"
+                class="map-surface layers-popover ${this.layersMenuOpen ? 'is-open' : ''}"
+                role="dialog"
+                aria-modal="true"
+                aria-labelledby="map-layers-title"
                 aria-hidden="${this.layersMenuOpen ? 'false' : 'true'}"
             >
-                <div class="layers-popover__header">Layers</div>
+                <div class="map-surface__header map-surface__header--sheet">
+                    <div class="map-surface__sheet-handle" aria-hidden="true"></div>
+                    <div class="map-surface__header-row">
+                        <div id="map-layers-title" class="map-surface__title">Layers</div>
+                        <button
+                            id="map-layers-close-button"
+                            class="map-surface__close-button"
+                            type="button"
+                            aria-label="Close layers"
+                            title="Close layers"
+                        >
+                            ${closeIcon}
+                        </button>
+                    </div>
+                </div>
                 <div class="layers-popover__tabs" role="tablist" aria-label="Layer types">
                     <button
                         id="layers-tab-base"
@@ -538,11 +589,32 @@ export class AppShell {
     private renderSettingsPopover(): string {
         return `
             <div
+                id="map-settings-backdrop"
+                class="map-surface-backdrop map-surface-backdrop--settings ${this.settingsMenuOpen ? 'is-open' : ''}"
+                aria-hidden="${this.settingsMenuOpen ? 'false' : 'true'}"
+            ></div>
+            <div
                 id="map-settings-popover"
-                class="map-popover settings-popover ${this.settingsMenuOpen ? 'is-open' : ''}"
+                class="map-surface settings-popover ${this.settingsMenuOpen ? 'is-open' : ''}"
+                role="dialog"
+                aria-modal="true"
+                aria-labelledby="map-settings-title"
                 aria-hidden="${this.settingsMenuOpen ? 'false' : 'true'}"
             >
-                <div class="layers-popover__header">Settings</div>
+                <div class="map-surface__header">
+                    <div class="map-surface__header-row">
+                        <div id="map-settings-title" class="map-surface__title">Settings</div>
+                        <button
+                            id="map-settings-close-button"
+                            class="map-surface__close-button"
+                            type="button"
+                            aria-label="Close settings"
+                            title="Close settings"
+                        >
+                            ${closeIcon}
+                        </button>
+                    </div>
+                </div>
                 <div class="settings-popover__tabs" role="tablist" aria-label="Settings sections">
                     ${this.renderSettingsTabButton('general', settingsIcon, 'General settings')}
                     ${this.renderSettingsTabButton('layers', layersIcon, 'Layer settings')}
@@ -550,8 +622,23 @@ export class AppShell {
                     ${this.renderSettingsTabButton('downloads', downloadIcon, 'Download settings')}
                 </div>
                 ${this.renderSettingsPopoverPanel('general', `
-                    <div class="settings-popover__placeholder">
-                        General settings will be added here.
+                    <div class="settings-popover__section">
+                        <button
+                            id="settings-theme-toggle"
+                            class="settings-popover__toggle"
+                            type="button"
+                            role="switch"
+                            aria-checked="${this.settings.theme === 'light' ? 'true' : 'false'}"
+                            title="Toggle light mode"
+                        >
+                            <span class="settings-popover__toggle-copy">
+                                <span class="settings-popover__toggle-label">Light mode</span>
+                                <span class="settings-popover__toggle-meta">Switch the app between dark and light themes.</span>
+                            </span>
+                            <span class="settings-popover__toggle-track" aria-hidden="true">
+                                <span class="settings-popover__toggle-thumb"></span>
+                            </span>
+                        </button>
                     </div>
                 `)}
                 ${this.renderSettingsPopoverPanel('layers', `
@@ -598,12 +685,15 @@ export class AppShell {
     }
 
     private syncLayersMenuVisibility(): void {
+        const backdrop = this.container.querySelector<HTMLElement>('#map-layers-backdrop');
         const popover = this.container.querySelector<HTMLElement>('#map-layers-popover');
 
-        if (!popover) {
+        if (!popover || !backdrop) {
             return;
         }
 
+        backdrop.classList.toggle('is-open', this.layersMenuOpen);
+        backdrop.setAttribute('aria-hidden', this.layersMenuOpen ? 'false' : 'true');
         popover.classList.toggle('is-open', this.layersMenuOpen);
         popover.setAttribute('aria-hidden', this.layersMenuOpen ? 'false' : 'true');
         this.syncLayersPopoverTab();
@@ -642,12 +732,15 @@ export class AppShell {
     }
 
     private syncSettingsMenuVisibility(): void {
+        const backdrop = this.container.querySelector<HTMLElement>('#map-settings-backdrop');
         const popover = this.container.querySelector<HTMLElement>('#map-settings-popover');
 
-        if (!popover) {
+        if (!popover || !backdrop) {
             return;
         }
 
+        backdrop.classList.toggle('is-open', this.settingsMenuOpen);
+        backdrop.setAttribute('aria-hidden', this.settingsMenuOpen ? 'false' : 'true');
         popover.classList.toggle('is-open', this.settingsMenuOpen);
         popover.setAttribute('aria-hidden', this.settingsMenuOpen ? 'false' : 'true');
         this.syncSettingsPopoverTab();
@@ -669,6 +762,8 @@ export class AppShell {
             panel.classList.toggle('is-active', isActive);
             panel.setAttribute('aria-hidden', isActive ? 'false' : 'true');
         });
+
+        this.syncThemeSettingControls();
     }
 
     private renderSourceOptions(
@@ -881,6 +976,12 @@ export class AppShell {
             return;
         }
 
+        const themeToggle = target.closest<HTMLButtonElement>('#settings-theme-toggle');
+        if (themeToggle) {
+            this.toggleThemePreference();
+            return;
+        }
+
         const optionButton = target.closest<HTMLButtonElement>('.settings-popover__option');
         if (!optionButton) {
             return;
@@ -988,6 +1089,44 @@ export class AppShell {
         }
     }
 
+    private toggleThemePreference(): void {
+        const nextTheme: AppTheme = this.settings.theme === 'light' ? 'dark' : 'light';
+        const nextSettings: AppSettings = {
+            ...this.settings,
+            theme: nextTheme
+        };
+
+        this.settings = nextSettings;
+        saveSettings(nextSettings);
+        this.applyThemePreference(nextTheme);
+        this.syncThemeSettingControls();
+    }
+
+    private applyThemePreference(theme: AppTheme): void {
+        // Apply the theme at both the root element and body so the palette
+        // propagates cleanly through the whole document tree.
+        if (theme === 'light') {
+            document.documentElement.dataset.theme = 'light';
+            document.body.dataset.theme = 'light';
+            return;
+        }
+
+        delete document.documentElement.dataset.theme;
+        delete document.body.dataset.theme;
+    }
+
+    private syncThemeSettingControls(): void {
+        const themeToggle = this.container.querySelector<HTMLButtonElement>('#settings-theme-toggle');
+        if (!themeToggle) {
+            return;
+        }
+
+        const isLightTheme = this.settings.theme === 'light';
+        themeToggle.classList.toggle('is-active', isLightTheme);
+        themeToggle.setAttribute('aria-checked', isLightTheme ? 'true' : 'false');
+        themeToggle.setAttribute('title', isLightTheme ? 'Switch to dark mode' : 'Switch to light mode');
+    }
+
     private getEnabledBaseSources(): RasterSourceConfig[] {
         const enabledIds = new Set(this.settings.enabledBaseLayerIds);
         return getBaseRasterSources().filter((source) => enabledIds.has(source.id));
@@ -1013,9 +1152,11 @@ export class AppShell {
         // The source catalog is module state so the UI, settings, and map
         // controller all read the same merged view of built-in and custom layers.
         appendCustomRasterSources(importedSources);
-        saveSourceCatalog();
+        const nextSourceCatalogState = getSourceCatalogState();
+        saveSourceCatalog(nextSourceCatalogState);
 
         const nextSettings = {
+            theme: this.settings.theme,
             enabledBaseLayerIds: this.mergeEnabledLayerIds(
                 this.settings.enabledBaseLayerIds,
                 importedSources.filter((source) => source.type === 'base').map((source) => source.id)

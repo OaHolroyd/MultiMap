@@ -25,7 +25,9 @@ export function loadStoredJson<T>({
 
         return data;
     } catch {
-        return fallback();
+        const fallbackData = fallback();
+        saveStoredJson(key, fallbackData);
+        return fallbackData;
     }
 }
 
