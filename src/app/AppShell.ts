@@ -20,6 +20,7 @@ import {
     type SettingsPopoverTab
 } from '../settings/settings';
 import compassIcon from '../assets/compass.svg?raw';
+import closeIcon from '../assets/close.svg?raw';
 import deleteIcon from '../assets/delete.svg?raw';
 import dragHandleIcon from '../assets/drag-handle.svg?raw';
 import downloadIcon from '../assets/download.svg?raw';
@@ -176,6 +177,9 @@ export class AppShell {
 
                 ${CONTROL_CLUSTERS.map((cluster) => this.renderCollapsibleCluster(cluster)).join('')}
 
+                ${this.renderLayersPopover()}
+                ${this.renderSettingsPopover()}
+
                 <div
                     class="map-overlay-cluster map-overlay-cluster--bottom-right ${this.controlsExpanded ? '' : 'is-collapsed'}"
                     aria-label="Map controls"
@@ -209,8 +213,6 @@ export class AppShell {
                     >
                         ${locateIcon}
                     </button>
-                    ${this.renderLayersPopover()}
-                    ${this.renderSettingsPopover()}
                     ${this.renderCollapsibleControls(BOTTOM_RIGHT_CONTROLS)}
                 </div>
             </div>
@@ -255,8 +257,12 @@ export class AppShell {
         const settingsButton = this.container.querySelector<HTMLButtonElement>('#map-settings-button');
         const importLayersButton = this.container.querySelector<HTMLButtonElement>('#settings-import-layers-button');
         const importLayersInput = this.container.querySelector<HTMLInputElement>('#settings-import-layers-input');
+        const layersBackdrop = this.container.querySelector<HTMLElement>('#map-layers-backdrop');
+        const settingsBackdrop = this.container.querySelector<HTMLElement>('#map-settings-backdrop');
         const layersPopover = this.container.querySelector<HTMLElement>('#map-layers-popover');
         const settingsPopover = this.container.querySelector<HTMLElement>('#map-settings-popover');
+        const closeLayersButton = this.container.querySelector<HTMLButtonElement>('#map-layers-close-button');
+        const closeSettingsButton = this.container.querySelector<HTMLButtonElement>('#map-settings-close-button');
 
         toggleButton?.addEventListener('click', () => {
             this.controlsExpanded = !this.controlsExpanded;
@@ -301,6 +307,16 @@ export class AppShell {
             this.syncSettingsMenuVisibility();
         });
 
+        layersBackdrop?.addEventListener('click', () => {
+            this.layersMenuOpen = false;
+            this.syncLayersMenuVisibility();
+        });
+
+        settingsBackdrop?.addEventListener('click', () => {
+            this.settingsMenuOpen = false;
+            this.syncSettingsMenuVisibility();
+        });
+
         layersPopover?.addEventListener('click', (event) => {
             event.stopPropagation();
             this.handleLayersPopoverClick(event);
@@ -313,6 +329,16 @@ export class AppShell {
 
         settingsPopover?.addEventListener('pointerdown', (event) => {
             this.handleSettingsPointerDown(event);
+        });
+
+        closeLayersButton?.addEventListener('click', () => {
+            this.layersMenuOpen = false;
+            this.syncLayersMenuVisibility();
+        });
+
+        closeSettingsButton?.addEventListener('click', () => {
+            this.settingsMenuOpen = false;
+            this.syncSettingsMenuVisibility();
         });
 
         importLayersButton?.addEventListener('click', () => {
@@ -476,11 +502,33 @@ export class AppShell {
     private renderLayersPopover(): string {
         return `
             <div
+                id="map-layers-backdrop"
+                class="map-surface-backdrop map-surface-backdrop--layers ${this.layersMenuOpen ? 'is-open' : ''}"
+                aria-hidden="${this.layersMenuOpen ? 'false' : 'true'}"
+            ></div>
+            <div
                 id="map-layers-popover"
-                class="map-popover layers-popover ${this.layersMenuOpen ? 'is-open' : ''}"
+                class="map-surface layers-popover ${this.layersMenuOpen ? 'is-open' : ''}"
+                role="dialog"
+                aria-modal="true"
+                aria-labelledby="map-layers-title"
                 aria-hidden="${this.layersMenuOpen ? 'false' : 'true'}"
             >
-                <div class="layers-popover__header">Layers</div>
+                <div class="map-surface__header map-surface__header--sheet">
+                    <div class="map-surface__sheet-handle" aria-hidden="true"></div>
+                    <div class="map-surface__header-row">
+                        <div id="map-layers-title" class="map-surface__title">Layers</div>
+                        <button
+                            id="map-layers-close-button"
+                            class="map-surface__close-button"
+                            type="button"
+                            aria-label="Close layers"
+                            title="Close layers"
+                        >
+                            ${closeIcon}
+                        </button>
+                    </div>
+                </div>
                 <div class="layers-popover__tabs" role="tablist" aria-label="Layer types">
                     <button
                         id="layers-tab-base"
@@ -538,11 +586,32 @@ export class AppShell {
     private renderSettingsPopover(): string {
         return `
             <div
+                id="map-settings-backdrop"
+                class="map-surface-backdrop map-surface-backdrop--settings ${this.settingsMenuOpen ? 'is-open' : ''}"
+                aria-hidden="${this.settingsMenuOpen ? 'false' : 'true'}"
+            ></div>
+            <div
                 id="map-settings-popover"
-                class="map-popover settings-popover ${this.settingsMenuOpen ? 'is-open' : ''}"
+                class="map-surface settings-popover ${this.settingsMenuOpen ? 'is-open' : ''}"
+                role="dialog"
+                aria-modal="true"
+                aria-labelledby="map-settings-title"
                 aria-hidden="${this.settingsMenuOpen ? 'false' : 'true'}"
             >
-                <div class="layers-popover__header">Settings</div>
+                <div class="map-surface__header">
+                    <div class="map-surface__header-row">
+                        <div id="map-settings-title" class="map-surface__title">Settings</div>
+                        <button
+                            id="map-settings-close-button"
+                            class="map-surface__close-button"
+                            type="button"
+                            aria-label="Close settings"
+                            title="Close settings"
+                        >
+                            ${closeIcon}
+                        </button>
+                    </div>
+                </div>
                 <div class="settings-popover__tabs" role="tablist" aria-label="Settings sections">
                     ${this.renderSettingsTabButton('general', settingsIcon, 'General settings')}
                     ${this.renderSettingsTabButton('layers', layersIcon, 'Layer settings')}
@@ -598,12 +667,15 @@ export class AppShell {
     }
 
     private syncLayersMenuVisibility(): void {
+        const backdrop = this.container.querySelector<HTMLElement>('#map-layers-backdrop');
         const popover = this.container.querySelector<HTMLElement>('#map-layers-popover');
 
-        if (!popover) {
+        if (!popover || !backdrop) {
             return;
         }
 
+        backdrop.classList.toggle('is-open', this.layersMenuOpen);
+        backdrop.setAttribute('aria-hidden', this.layersMenuOpen ? 'false' : 'true');
         popover.classList.toggle('is-open', this.layersMenuOpen);
         popover.setAttribute('aria-hidden', this.layersMenuOpen ? 'false' : 'true');
         this.syncLayersPopoverTab();
@@ -642,12 +714,15 @@ export class AppShell {
     }
 
     private syncSettingsMenuVisibility(): void {
+        const backdrop = this.container.querySelector<HTMLElement>('#map-settings-backdrop');
         const popover = this.container.querySelector<HTMLElement>('#map-settings-popover');
 
-        if (!popover) {
+        if (!popover || !backdrop) {
             return;
         }
 
+        backdrop.classList.toggle('is-open', this.settingsMenuOpen);
+        backdrop.setAttribute('aria-hidden', this.settingsMenuOpen ? 'false' : 'true');
         popover.classList.toggle('is-open', this.settingsMenuOpen);
         popover.setAttribute('aria-hidden', this.settingsMenuOpen ? 'false' : 'true');
         this.syncSettingsPopoverTab();

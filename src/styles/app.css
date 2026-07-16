@@ -90,6 +90,13 @@
     --transition-fast: 140ms ease;
     --transition-medium: 180ms ease;
     --transition-spring: 180ms cubic-bezier(0.22, 1, 0.36, 1);
+    --transition-surface-desktop: 180ms cubic-bezier(0.22, 1, 0.36, 1);
+    --transition-surface-mobile: 220ms cubic-bezier(0.22, 1, 0.36, 1);
+    --layers-popover-width: 280px;
+    --settings-panel-width: min(360px, calc(100vw - 32px - var(--safe-area-right)));
+    --surface-header-gap: 12px;
+    --surface-header-padding: 12px;
+    --surface-close-size: 36px;
     --user-location-marker-color: #1f74ff;
     --user-location-marker-border-color: #ffffff;
     --user-location-marker-glow-color: rgba(31, 116, 255, 0.18);
@@ -231,13 +238,33 @@ body {
     align-items: center;
 }
 
-.map-popover {
+.map-surface-backdrop {
     position: absolute;
+    inset: 0;
     z-index: 3;
+    opacity: 0;
+    pointer-events: none;
+    background: var(--color-overlay);
+    transition: opacity var(--transition-fast);
+}
+
+.map-surface-backdrop.is-open {
+    opacity: 1;
+    pointer-events: auto;
+}
+
+.map-surface-backdrop--layers {
+    display: none;
+}
+
+.map-surface {
+    position: absolute;
+    z-index: 4;
     display: flex;
     flex-direction: column;
     max-height: calc(100dvh - var(--safe-area-top) - var(--safe-area-bottom) - 24px);
     padding: 10px;
+    border: 1px solid var(--color-border-default);
     border-radius: var(--popover-radius);
     background: var(--popover-bg-color);
     color: var(--control-text-color);
@@ -245,34 +272,102 @@ body {
     transform: translateY(8px) scale(0.98);
     pointer-events: none;
     box-shadow: var(--shadow-popover);
-    transition: opacity var(--transition-fast), transform var(--transition-fast);
+    transition: opacity var(--transition-surface-desktop), transform var(--transition-surface-desktop);
 }
 
-.map-popover.is-open {
+.map-surface.is-open {
     opacity: 1;
     transform: translateY(0) scale(1);
     pointer-events: auto;
 }
 
-.layers-popover {
-    right: 54px;
-    bottom: 50px;
-    width: 260px;
-}
-
-.settings-popover {
-    right: 54px;
-    bottom: 0;
-    width: 320px;
-}
-
-.layers-popover__header {
+.map-surface__header {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
     margin-bottom: 8px;
+}
+
+.map-surface__header-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--surface-header-gap);
+}
+
+.map-surface__header--sheet {
+    margin: -2px -2px 8px;
+    padding: 0 2px;
+}
+
+.map-surface__sheet-handle {
+    align-self: center;
+    width: 42px;
+    height: 4px;
+    border-radius: 999px;
+    background: var(--color-border-strong);
+}
+
+.map-surface__title {
     font-size: 12px;
     font-weight: 700;
     text-transform: uppercase;
     letter-spacing: 0.04em;
     color: var(--control-text-color-muted);
+}
+
+.map-surface__close-button {
+    display: grid;
+    place-items: center;
+    width: var(--surface-close-size);
+    height: var(--surface-close-size);
+    padding: 0;
+    border: 0;
+    border-radius: 999px;
+    background: var(--surface-bg-color);
+    color: var(--control-text-color-muted);
+    cursor: pointer;
+    transition: background var(--transition-fast), color var(--transition-fast), transform var(--transition-fast);
+}
+
+.map-surface__close-button:hover {
+    background: var(--surface-bg-color-hover);
+    color: var(--control-text-color);
+}
+
+.map-surface__close-button:focus-visible {
+    outline: 2px solid var(--control-focus-ring-color);
+    outline-offset: 2px;
+}
+
+.map-surface__close-button .map-action-icon {
+    width: 18px;
+    height: 18px;
+}
+
+.layers-popover {
+    right: 54px;
+    bottom: 50px;
+    width: var(--layers-popover-width);
+}
+
+.settings-popover {
+    top: 0;
+    right: 0;
+    bottom: 0;
+    width: var(--settings-panel-width);
+    max-height: none;
+    padding: var(--surface-header-padding);
+    border-right: 0;
+    border-top: 0;
+    border-bottom: 0;
+    border-radius: 0;
+    transform: translateX(20px);
+    transition: opacity var(--transition-surface-desktop), transform var(--transition-surface-desktop);
+}
+
+.settings-popover.is-open {
+    transform: translateX(0);
 }
 
 .layers-popover__tabs {
@@ -313,6 +408,7 @@ body {
     display: none;
     min-height: 0;
     overflow-y: auto;
+    overscroll-behavior: contain;
 }
 
 .settings-popover__panel.is-active {
@@ -666,6 +762,58 @@ body.is-sorting-layers {
 .map-action-icon {
     width: 22px;
     height: 22px;
+}
+
+@media (max-width: 767px) {
+    .map-surface-backdrop--layers.is-open {
+        display: block;
+    }
+
+    .map-surface {
+        max-height: none;
+        box-shadow: 0 -18px 48px var(--color-shadow-heavy);
+    }
+
+    .layers-popover {
+        left: calc(var(--safe-area-left) + 8px);
+        right: calc(var(--safe-area-right) + 8px);
+        bottom: 0;
+        width: auto;
+        max-height: min(72dvh, calc(100dvh - var(--safe-area-top) - 16px));
+        padding: 12px 12px calc(12px + var(--safe-area-bottom));
+        border-right: 1px solid var(--color-border-default);
+        border-bottom: 0;
+        border-left: 1px solid var(--color-border-default);
+        border-radius: 18px 18px 0 0;
+        transform: translateY(calc(100% + var(--safe-area-bottom)));
+        transition: opacity var(--transition-surface-mobile), transform var(--transition-surface-mobile);
+    }
+
+    .layers-popover.is-open {
+        transform: translateY(0);
+    }
+
+    .settings-popover {
+        inset: 0;
+        width: auto;
+        padding:
+            calc(var(--surface-header-padding) + var(--safe-area-top))
+            var(--surface-header-padding)
+            calc(var(--surface-header-padding) + var(--safe-area-bottom));
+        border: 0;
+        transform: translateY(16px);
+        transition: opacity var(--transition-surface-mobile), transform var(--transition-surface-mobile);
+    }
+
+    .settings-popover.is-open {
+        transform: translateY(0);
+    }
+}
+
+@media (min-width: 768px) {
+    .map-surface__sheet-handle {
+        display: none;
+    }
 }
 
 /* ============== */
