@@ -147,6 +147,7 @@
   --user-location-marker-glow-color: rgba(31, 116, 255, 0.18);
 }
 
+:root[data-theme="light"],
 body[data-theme="light"] {
   color-scheme: light;
   --native-color-scheme: light;
@@ -572,13 +573,90 @@ body {
 }
 
 .settings-popover__section {
-  display: flex;
-  flex-direction: column;
-  gap: var(--control-gap);
+    display: flex;
+    flex-direction: column;
+    gap: var(--control-gap);
+}
+
+.settings-popover__toggle {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    width: 100%;
+    padding: 12px;
+    border: 0;
+    border-radius: var(--popover-radius);
+    background: var(--surface-bg-color);
+    color: var(--control-text-color);
+    text-align: left;
+    cursor: pointer;
+    transition: background var(--transition-fast), box-shadow var(--transition-fast);
+}
+
+.settings-popover__toggle:hover {
+    background: var(--surface-bg-color-hover);
+}
+
+.settings-popover__toggle:focus-visible {
+    outline: 2px solid var(--control-focus-ring-color);
+    outline-offset: 2px;
+}
+
+.settings-popover__toggle.is-active {
+    box-shadow: inset 0 0 0 1px var(--surface-outline-color-enabled);
+}
+
+.settings-popover__toggle-copy {
+    display: flex;
+    min-width: 0;
+    flex-direction: column;
+    gap: 3px;
+}
+
+.settings-popover__toggle-label {
+    font-size: 13px;
+    font-weight: 600;
+}
+
+.settings-popover__toggle-meta {
+    font-size: 11px;
+    line-height: 1.4;
+    color: var(--control-text-color-subtle);
+}
+
+.settings-popover__toggle-track {
+    position: relative;
+    flex: 0 0 auto;
+    width: 42px;
+    height: 24px;
+    border-radius: 999px;
+    background: var(--color-border-strong);
+    transition: background var(--transition-fast);
+}
+
+.settings-popover__toggle-thumb {
+    position: absolute;
+    top: 3px;
+    left: 3px;
+    width: 18px;
+    height: 18px;
+    border-radius: 999px;
+    background: var(--color-text-contrast);
+    box-shadow: 0 1px 3px var(--color-shadow-medium);
+    transition: transform var(--transition-fast);
+}
+
+.settings-popover__toggle.is-active .settings-popover__toggle-track {
+    background: var(--color-accent);
+}
+
+.settings-popover__toggle.is-active .settings-popover__toggle-thumb {
+    transform: translateX(18px);
 }
 
 .settings-popover__actions {
-  display: flex;
+    display: flex;
 }
 
 .settings-popover__action-button {

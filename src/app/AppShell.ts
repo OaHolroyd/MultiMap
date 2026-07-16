@@ -16,6 +16,7 @@ import { loadLayerSelection, saveLayerSelection } from '../map/storage';
 import type { LayerSelectionState } from '../map/layerSelection';
 import { loadSettings, saveSettings } from '../settings/storage';
 import {
+    type AppTheme,
     type AppSettings,
     type SettingsPopoverTab
 } from '../settings/settings';
@@ -165,9 +166,11 @@ export class AppShell {
 
     public init(): void {
         this.render();
+        this.applyThemePreference(this.settings.theme);
         this.mountMap();
         this.bindEvents();
         this.syncLayersPopoverTab();
+        this.syncThemeSettingControls();
     }
 
     private render(): void {
@@ -619,8 +622,23 @@ export class AppShell {
                     ${this.renderSettingsTabButton('downloads', downloadIcon, 'Download settings')}
                 </div>
                 ${this.renderSettingsPopoverPanel('general', `
-                    <div class="settings-popover__placeholder">
-                        General settings will be added here.
+                    <div class="settings-popover__section">
+                        <button
+                            id="settings-theme-toggle"
+                            class="settings-popover__toggle"
+                            type="button"
+                            role="switch"
+                            aria-checked="${this.settings.theme === 'light' ? 'true' : 'false'}"
+                            title="Toggle light mode"
+                        >
+                            <span class="settings-popover__toggle-copy">
+                                <span class="settings-popover__toggle-label">Light mode</span>
+                                <span class="settings-popover__toggle-meta">Switch the app between dark and light themes.</span>
+                            </span>
+                            <span class="settings-popover__toggle-track" aria-hidden="true">
+                                <span class="settings-popover__toggle-thumb"></span>
+                            </span>
+                        </button>
                     </div>
                 `)}
                 ${this.renderSettingsPopoverPanel('layers', `
@@ -744,6 +762,8 @@ export class AppShell {
             panel.classList.toggle('is-active', isActive);
             panel.setAttribute('aria-hidden', isActive ? 'false' : 'true');
         });
+
+        this.syncThemeSettingControls();
     }
 
     private renderSourceOptions(
@@ -956,6 +976,12 @@ export class AppShell {
             return;
         }
 
+        const themeToggle = target.closest<HTMLButtonElement>('#settings-theme-toggle');
+        if (themeToggle) {
+            this.toggleThemePreference();
+            return;
+        }
+
         const optionButton = target.closest<HTMLButtonElement>('.settings-popover__option');
         if (!optionButton) {
             return;
@@ -1063,6 +1089,44 @@ export class AppShell {
         }
     }
 
+    private toggleThemePreference(): void {
+        const nextTheme: AppTheme = this.settings.theme === 'light' ? 'dark' : 'light';
+        const nextSettings: AppSettings = {
+            ...this.settings,
+            theme: nextTheme
+        };
+
+        this.settings = nextSettings;
+        saveSettings(nextSettings);
+        this.applyThemePreference(nextTheme);
+        this.syncThemeSettingControls();
+    }
+
+    private applyThemePreference(theme: AppTheme): void {
+        // Apply the theme at both the root element and body so the palette
+        // propagates cleanly through the whole document tree.
+        if (theme === 'light') {
+            document.documentElement.dataset.theme = 'light';
+            document.body.dataset.theme = 'light';
+            return;
+        }
+
+        delete document.documentElement.dataset.theme;
+        delete document.body.dataset.theme;
+    }
+
+    private syncThemeSettingControls(): void {
+        const themeToggle = this.container.querySelector<HTMLButtonElement>('#settings-theme-toggle');
+        if (!themeToggle) {
+            return;
+        }
+
+        const isLightTheme = this.settings.theme === 'light';
+        themeToggle.classList.toggle('is-active', isLightTheme);
+        themeToggle.setAttribute('aria-checked', isLightTheme ? 'true' : 'false');
+        themeToggle.setAttribute('title', isLightTheme ? 'Switch to dark mode' : 'Switch to light mode');
+    }
+
     private getEnabledBaseSources(): RasterSourceConfig[] {
         const enabledIds = new Set(this.settings.enabledBaseLayerIds);
         return getBaseRasterSources().filter((source) => enabledIds.has(source.id));
@@ -1091,6 +1155,7 @@ export class AppShell {
         saveSourceCatalog();
 
         const nextSettings = {
+            theme: this.settings.theme,
             enabledBaseLayerIds: this.mergeEnabledLayerIds(
                 this.settings.enabledBaseLayerIds,
                 importedSources.filter((source) => source.type === 'base').map((source) => source.id)

@@ -8,14 +8,17 @@ import type { StorageMigrationResult } from '../storage/localStorage';
 export const SETTINGS_STORAGE_KEY = 'multimap.settings';
 
 export type SettingsPopoverTab = 'general' | 'layers' | 'routes' | 'downloads';
+export type AppTheme = 'dark' | 'light';
 
 export interface AppSettings {
+    readonly theme: AppTheme;
     readonly enabledBaseLayerIds: string[];
     readonly enabledOverlayIds: string[];
 }
 
 export function getDefaultSettings(): AppSettings {
     return {
+        theme: 'dark',
         enabledBaseLayerIds: getBaseRasterSources().map((source) => source.id),
         enabledOverlayIds: getOverlayRasterSources().map((source) => source.id)
     };
@@ -23,6 +26,7 @@ export function getDefaultSettings(): AppSettings {
 
 export function cloneSettings(settings: AppSettings): AppSettings {
     return {
+        theme: settings.theme,
         enabledBaseLayerIds: [...settings.enabledBaseLayerIds],
         enabledOverlayIds: [...settings.enabledOverlayIds]
     };
@@ -49,6 +53,7 @@ export function migrateStorageShape(savedData: unknown): StorageMigrationResult<
         savedData.enabledOverlayIds,
         defaultOverlayIds
     );
+    const theme = normalizeTheme(savedData.theme);
 
     // The layer picker expects at least one base layer to remain available, so
     // persisted settings are normalized to keep a valid fallback.
@@ -58,14 +63,14 @@ export function migrateStorageShape(savedData: unknown): StorageMigrationResult<
     const normalizedOverlayIds = enabledOverlayIds;
 
     const normalizedSettings: AppSettings = {
+        theme,
         enabledBaseLayerIds: normalizedBaseLayerIds,
         enabledOverlayIds: normalizedOverlayIds
     };
 
-    const didChange = !arraysEqual(
-        enabledBaseLayerIds,
-        normalizedBaseLayerIds
-    ) || !arraysEqual(enabledOverlayIds, normalizedOverlayIds);
+    const didChange = theme !== savedData.theme
+        || !arraysEqual(enabledBaseLayerIds, normalizedBaseLayerIds)
+        || !arraysEqual(enabledOverlayIds, normalizedOverlayIds);
 
     return {
         data: normalizedSettings,
@@ -91,6 +96,10 @@ function filterKnownIds(
     });
 
     return [...uniqueIds];
+}
+
+function normalizeTheme(candidateTheme: unknown): AppTheme {
+    return candidateTheme === 'light' ? 'light' : 'dark';
 }
 
 function isObject(value: unknown): value is Record<string, unknown> {
