@@ -1,9 +1,17 @@
 import { MapController } from '../map/MapController';
 import {
-    SOURCES_RASTER,
-    SOURCES_RASTER_OVERLAYS,
+    appendCustomRasterSources,
+    deleteCustomRasterSource,
+    getAllRasterSources,
+    getBaseRasterSources,
+    getOverlayRasterSources,
+    getSourceCatalogState,
+    isCustomRasterSource,
+    parseRasterSourceImport,
+    setRasterSourceOrder,
     type RasterSourceConfig
 } from '../map/sources';
+import { loadSourceCatalog, saveSourceCatalog } from '../map/sourceStorage';
 import { loadLayerSelection, saveLayerSelection } from '../map/storage';
 import type { LayerSelectionState } from '../map/layerSelection';
 import { loadSettings, saveSettings } from '../settings/storage';
@@ -12,6 +20,8 @@ import {
     type SettingsPopoverTab
 } from '../settings/settings';
 import compassIcon from '../assets/compass.svg?raw';
+import deleteIcon from '../assets/delete.svg?raw';
+import dragHandleIcon from '../assets/drag-handle.svg?raw';
 import downloadIcon from '../assets/download.svg?raw';
 import layersIcon from '../assets/layers.svg?raw';
 import locateIcon from '../assets/locate.svg?raw';
@@ -36,6 +46,27 @@ interface ControlClusterDefinition {
 }
 
 type LayersPopoverTab = 'base' | 'overlays';
+
+interface SettingsDragState {
+    readonly pointerId: number;
+    readonly sourceId: string;
+    readonly sourceKind: 'base' | 'overlay';
+    readonly list: HTMLElement;
+    readonly item: HTMLElement;
+    readonly startPointerY: number;
+    readonly scrollOrigin: number;
+    baseShiftY: number;
+}
+
+interface SettingsSwipeState {
+    readonly pointerId: number;
+    readonly sourceId: string;
+    readonly item: HTMLElement;
+    readonly startPointerX: number;
+    readonly startPointerY: number;
+    engaged: boolean;
+    offsetX: number;
+}
 
 const TOP_LEFT_CONTROLS: readonly CollapsibleControlDefinition[] = [
     {
@@ -108,6 +139,9 @@ export class AppShell {
     private settingsPopoverTab: SettingsPopoverTab;
     private settings: AppSettings;
     private layerSelection: LayerSelectionState;
+    private settingsDragState: SettingsDragState | null;
+    private settingsSwipeState: SettingsSwipeState | null;
+    private suppressSettingsClick: boolean;
 
     constructor(container: HTMLElement) {
         this.container = container;
@@ -116,6 +150,10 @@ export class AppShell {
         this.northResetVisible = false;
         this.layersMenuOpen = false;
         this.settingsMenuOpen = false;
+        this.settingsDragState = null;
+        this.settingsSwipeState = null;
+        this.suppressSettingsClick = false;
+        loadSourceCatalog();
         this.settings = loadSettings();
         this.layerSelection = loadLayerSelection(this.settings);
         this.activeRasterSourceId = this.layerSelection.activeBaseLayerId;
@@ -215,6 +253,8 @@ export class AppShell {
         const locateButton = this.container.querySelector<HTMLButtonElement>('#map-locate-button');
         const layersButton = this.container.querySelector<HTMLButtonElement>('#map-layers-button');
         const settingsButton = this.container.querySelector<HTMLButtonElement>('#map-settings-button');
+        const importLayersButton = this.container.querySelector<HTMLButtonElement>('#settings-import-layers-button');
+        const importLayersInput = this.container.querySelector<HTMLInputElement>('#settings-import-layers-input');
         const layersPopover = this.container.querySelector<HTMLElement>('#map-layers-popover');
         const settingsPopover = this.container.querySelector<HTMLElement>('#map-settings-popover');
 
@@ -269,6 +309,30 @@ export class AppShell {
         settingsPopover?.addEventListener('click', (event) => {
             event.stopPropagation();
             this.handleSettingsPopoverClick(event);
+        });
+
+        settingsPopover?.addEventListener('pointerdown', (event) => {
+            this.handleSettingsPointerDown(event);
+        });
+
+        importLayersButton?.addEventListener('click', () => {
+            importLayersInput?.click();
+        });
+
+        importLayersInput?.addEventListener('change', async () => {
+            const [file] = Array.from(importLayersInput.files ?? []);
+            if (!file) {
+                return;
+            }
+
+            try {
+                await this.importLayersFromFile(file);
+            } catch (error) {
+                const message = error instanceof Error ? error.message : 'Unable to import layer definitions.';
+                window.alert(message);
+            } finally {
+                importLayersInput.value = '';
+            }
         });
 
         this.bindPlaceholderControlHandlers();
@@ -491,16 +555,31 @@ export class AppShell {
                     </div>
                 `)}
                 ${this.renderSettingsPopoverPanel('layers', `
+                    <div class="settings-popover__actions">
+                        <button
+                            id="settings-import-layers-button"
+                            class="settings-popover__action-button"
+                            type="button"
+                        >
+                            Add layers
+                        </button>
+                        <input
+                            id="settings-import-layers-input"
+                            class="settings-popover__file-input"
+                            type="file"
+                            accept="application/json,.json"
+                        >
+                    </div>
                     <div class="settings-popover__section">
                         <div class="settings-popover__section-label">Base layers</div>
                         <div id="settings-base-layer-list" class="settings-popover__list">
-                            ${this.renderSettingsSourceAvailabilityOptions(SOURCES_RASTER, 'base')}
+                            ${this.renderSettingsSourceAvailabilityOptions(getBaseRasterSources(), 'base')}
                         </div>
                     </div>
                     <div class="settings-popover__section">
                         <div class="settings-popover__section-label">Overlays</div>
                         <div id="settings-overlay-layer-list" class="settings-popover__list">
-                            ${this.renderSettingsSourceAvailabilityOptions(SOURCES_RASTER_OVERLAYS, 'overlay')}
+                            ${this.renderSettingsSourceAvailabilityOptions(getOverlayRasterSources(), 'overlay')}
                         </div>
                     </div>
                 `)}
@@ -679,29 +758,61 @@ export class AppShell {
         return sources.map((source) => {
             const isEnabled = enabledIds.includes(source.id);
             const isRequiredBase = sourceKind === 'base' && lastEnabledBaseId === source.id;
+            const isCustom = isCustomRasterSource(source.id);
+            const itemClasses = [
+                'settings-popover__item',
+                isEnabled ? 'is-enabled' : 'is-disabled',
+                isCustom ? 'is-custom' : 'is-default'
+            ].join(' ');
 
             return `
-                <button
-                    class="settings-popover__option ${isEnabled ? 'is-enabled' : 'is-disabled'}"
-                    type="button"
+                <div
+                    class="${itemClasses}"
                     data-settings-source-id="${source.id}"
                     data-settings-source-kind="${sourceKind}"
-                    aria-pressed="${isEnabled ? 'true' : 'false'}"
-                    ${isRequiredBase ? 'disabled' : ''}
                 >
-                    <img
-                        class="layers-popover__preview"
-                        src="${this.buildSourcePreviewUrl(source)}"
-                        alt=""
-                        loading="lazy"
-                        decoding="async"
-                        crossorigin="anonymous"
+                    <button
+                        class="settings-popover__handle"
+                        type="button"
+                        aria-label="Drag to reorder ${source.layerId}"
+                        title="Drag to reorder ${source.layerId}"
+                        tabindex="-1"
                     >
-                    <span class="layers-popover__option-copy">
-                        <span class="layers-popover__option-label">${source.layerId}</span>
-                        <span class="layers-popover__option-meta">${source.attribution || 'No attribution'}</span>
-                    </span>
-                </button>
+                        ${dragHandleIcon}
+                    </button>
+                    <button
+                        class="settings-popover__option"
+                        type="button"
+                        data-settings-source-id="${source.id}"
+                        data-settings-source-kind="${sourceKind}"
+                        aria-pressed="${isEnabled ? 'true' : 'false'}"
+                        ${isRequiredBase ? 'disabled' : ''}
+                    >
+                        <img
+                            class="layers-popover__preview"
+                            src="${this.buildSourcePreviewUrl(source)}"
+                            alt=""
+                            loading="lazy"
+                            decoding="async"
+                            crossorigin="anonymous"
+                        >
+                        <span class="layers-popover__option-copy">
+                            <span class="layers-popover__option-label">${source.layerId}</span>
+                            <span class="layers-popover__option-meta">${source.attribution || 'No attribution'}</span>
+                        </span>
+                    </button>
+                    ${isCustom ? `
+                        <button
+                            class="settings-popover__delete-button"
+                            type="button"
+                            data-delete-source-id="${source.id}"
+                            aria-label="Delete ${source.layerId}"
+                            title="Delete ${source.layerId}"
+                        >
+                            ${deleteIcon}
+                        </button>
+                    ` : '<span class="settings-popover__delete-spacer" aria-hidden="true"></span>'}
+                </div>
             `;
         }).join('');
     }
@@ -746,12 +857,26 @@ export class AppShell {
             return;
         }
 
+        if (this.suppressSettingsClick) {
+            this.suppressSettingsClick = false;
+            return;
+        }
+
         const tabButton = target.closest<HTMLButtonElement>('.settings-popover__tab');
         if (tabButton) {
             const nextTab = tabButton.dataset.panel;
             if (nextTab === 'general' || nextTab === 'layers' || nextTab === 'routes' || nextTab === 'downloads') {
                 this.settingsPopoverTab = nextTab;
                 this.syncSettingsPopoverTab();
+            }
+            return;
+        }
+
+        const deleteButton = target.closest<HTMLButtonElement>('.settings-popover__delete-button');
+        if (deleteButton) {
+            const sourceId = deleteButton.dataset.deleteSourceId;
+            if (sourceId) {
+                await this.animateAndDeleteLayer(sourceId, deleteButton);
             }
             return;
         }
@@ -855,22 +980,22 @@ export class AppShell {
         const overlayList = this.container.querySelector<HTMLElement>('#settings-overlay-layer-list');
 
         if (baseList) {
-            baseList.innerHTML = this.renderSettingsSourceAvailabilityOptions(SOURCES_RASTER, 'base');
+            baseList.innerHTML = this.renderSettingsSourceAvailabilityOptions(getBaseRasterSources(), 'base');
         }
 
         if (overlayList) {
-            overlayList.innerHTML = this.renderSettingsSourceAvailabilityOptions(SOURCES_RASTER_OVERLAYS, 'overlay');
+            overlayList.innerHTML = this.renderSettingsSourceAvailabilityOptions(getOverlayRasterSources(), 'overlay');
         }
     }
 
     private getEnabledBaseSources(): RasterSourceConfig[] {
         const enabledIds = new Set(this.settings.enabledBaseLayerIds);
-        return SOURCES_RASTER.filter((source) => enabledIds.has(source.id));
+        return getBaseRasterSources().filter((source) => enabledIds.has(source.id));
     }
 
     private getEnabledOverlaySources(): RasterSourceConfig[] {
         const enabledIds = new Set(this.settings.enabledOverlayIds);
-        return SOURCES_RASTER_OVERLAYS.filter((source) => enabledIds.has(source.id));
+        return getOverlayRasterSources().filter((source) => enabledIds.has(source.id));
     }
 
     private persistLayerSelection(): void {
@@ -879,6 +1004,405 @@ export class AppShell {
             activeOverlayIds: [...this.activeOverlayIds]
         };
         saveLayerSelection(this.layerSelection);
+    }
+
+    private async importLayersFromFile(file: File): Promise<void> {
+        const importedJson = JSON.parse(await file.text());
+        const importedSources = parseRasterSourceImport(importedJson, getAllRasterSources());
+
+        // The source catalog is module state so the UI, settings, and map
+        // controller all read the same merged view of built-in and custom layers.
+        appendCustomRasterSources(importedSources);
+        saveSourceCatalog();
+
+        const nextSettings = {
+            enabledBaseLayerIds: this.mergeEnabledLayerIds(
+                this.settings.enabledBaseLayerIds,
+                importedSources.filter((source) => source.type === 'base').map((source) => source.id)
+            ),
+            enabledOverlayIds: this.mergeEnabledLayerIds(
+                this.settings.enabledOverlayIds,
+                importedSources.filter((source) => source.type === 'overlay').map((source) => source.id)
+            )
+        };
+
+        this.settings = nextSettings;
+        saveSettings(nextSettings);
+        this.refreshLayerSelectionMenu();
+        this.refreshSettingsLayersPanel();
+
+        window.alert(`Imported ${importedSources.length} layer${importedSources.length === 1 ? '' : 's'}.`);
+    }
+
+    private mergeEnabledLayerIds(
+        existingIds: readonly string[],
+        importedIds: readonly string[]
+    ): string[] {
+        const mergedIds = new Set(existingIds);
+        importedIds.forEach((sourceId) => {
+            mergedIds.add(sourceId);
+        });
+        return [...mergedIds];
+    }
+
+    private handleSettingsPointerDown(event: PointerEvent): void {
+        const target = event.target;
+        if (!(target instanceof Element)) {
+            return;
+        }
+
+        if (this.settingsDragState || this.settingsSwipeState) {
+            return;
+        }
+
+        const handle = target.closest<HTMLButtonElement>('.settings-popover__handle');
+        if (!handle) {
+            this.beginSettingsSwipeCandidate(event, target);
+            return;
+        }
+
+        const item = handle.closest<HTMLElement>('.settings-popover__item');
+        const list = handle.closest<HTMLElement>('.settings-popover__list');
+        if (!item || !list) {
+            return;
+        }
+
+        const sourceId = item.dataset.settingsSourceId;
+        const sourceKind = item.dataset.settingsSourceKind;
+        if (!sourceId || (sourceKind !== 'base' && sourceKind !== 'overlay')) {
+            return;
+        }
+
+        event.preventDefault();
+
+        this.settingsDragState = {
+            pointerId: event.pointerId,
+            sourceId,
+            sourceKind,
+            list,
+            item,
+            startPointerY: event.clientY,
+            scrollOrigin: list.scrollTop,
+            baseShiftY: 0
+        };
+
+        handle.setPointerCapture(event.pointerId);
+        item.classList.add('is-dragging');
+        list.classList.add('is-sorting');
+        document.body.classList.add('is-sorting-layers');
+        this.updateDraggedItemOffset(event.clientY);
+
+        window.addEventListener('pointermove', this.handleSettingsPointerMove);
+        window.addEventListener('pointerup', this.handleSettingsPointerUp);
+        window.addEventListener('pointercancel', this.handleSettingsPointerUp);
+    }
+
+    private beginSettingsSwipeCandidate(event: PointerEvent, target: Element): void {
+        const item = target.closest<HTMLElement>('.settings-popover__item.is-custom');
+        if (!item) {
+            return;
+        }
+
+        const itemRect = item.getBoundingClientRect();
+        const rightEdgeThreshold = 64;
+        const isDeleteButton = Boolean(target.closest('.settings-popover__delete-button'));
+        const isNearRightEdge = itemRect.right - event.clientX <= rightEdgeThreshold;
+
+        if (!isDeleteButton && !isNearRightEdge) {
+            return;
+        }
+
+        const sourceId = item.dataset.settingsSourceId;
+        if (!sourceId) {
+            return;
+        }
+
+        this.settingsSwipeState = {
+            pointerId: event.pointerId,
+            sourceId,
+            item,
+            startPointerX: event.clientX,
+            startPointerY: event.clientY,
+            engaged: false,
+            offsetX: 0
+        };
+
+        window.addEventListener('pointermove', this.handleSettingsSwipeMove);
+        window.addEventListener('pointerup', this.handleSettingsSwipeEnd);
+        window.addEventListener('pointercancel', this.handleSettingsSwipeEnd);
+    }
+
+    private readonly handleSettingsPointerMove = (event: PointerEvent): void => {
+        const dragState = this.settingsDragState;
+        if (!dragState || event.pointerId !== dragState.pointerId) {
+            return;
+        }
+
+        event.preventDefault();
+        this.updateDraggedItemOffset(event.clientY);
+        this.autoScrollSettingsList(event.clientY);
+        this.repositionDraggedItem(event.clientY);
+    };
+
+    private readonly handleSettingsPointerUp = (event: PointerEvent): void => {
+        const dragState = this.settingsDragState;
+        if (!dragState || event.pointerId !== dragState.pointerId) {
+            return;
+        }
+
+        this.persistDraggedItemOrder();
+        this.clearDraggedItemState();
+    };
+
+    private readonly handleSettingsSwipeMove = (event: PointerEvent): void => {
+        const swipeState = this.settingsSwipeState;
+        if (!swipeState || event.pointerId !== swipeState.pointerId) {
+            return;
+        }
+
+        const deltaX = event.clientX - swipeState.startPointerX;
+        const deltaY = event.clientY - swipeState.startPointerY;
+
+        if (!swipeState.engaged) {
+            if (Math.abs(deltaY) > 10 && Math.abs(deltaY) > Math.abs(deltaX)) {
+                this.clearSwipeState();
+                return;
+            }
+
+            if (deltaX < -8 && Math.abs(deltaX) > Math.abs(deltaY)) {
+                swipeState.engaged = true;
+                swipeState.item.classList.add('is-swiping');
+            } else {
+                return;
+            }
+        }
+
+        event.preventDefault();
+
+        const clampedOffsetX = Math.max(-96, Math.min(0, deltaX));
+        swipeState.offsetX = clampedOffsetX;
+        swipeState.item.style.setProperty('--swipe-offset-x', `${clampedOffsetX}px`);
+    };
+
+    private readonly handleSettingsSwipeEnd = async (event: PointerEvent): Promise<void> => {
+        const swipeState = this.settingsSwipeState;
+        if (!swipeState || event.pointerId !== swipeState.pointerId) {
+            return;
+        }
+
+        const shouldDelete = swipeState.engaged && swipeState.offsetX <= -56;
+        const sourceId = swipeState.sourceId;
+        const item = swipeState.item;
+        const offsetX = swipeState.offsetX;
+
+        this.suppressSettingsClick = swipeState.engaged;
+        this.clearSwipeState();
+
+        if (shouldDelete) {
+            await this.animateAndDeleteLayer(sourceId, item, offsetX);
+        }
+    };
+
+    private updateDraggedItemOffset(pointerY: number): void {
+        const dragState = this.settingsDragState;
+        if (!dragState) {
+            return;
+        }
+
+        const offsetY = pointerY
+            - dragState.startPointerY
+            + (dragState.list.scrollTop - dragState.scrollOrigin)
+            - dragState.baseShiftY;
+        dragState.item.style.setProperty('--sort-offset-y', `${offsetY}px`);
+    }
+
+    private repositionDraggedItem(pointerY: number): void {
+        const dragState = this.settingsDragState;
+        if (!dragState) {
+            return;
+        }
+
+        const siblingItems = Array.from(
+            dragState.list.querySelectorAll<HTMLElement>('.settings-popover__item:not(.is-dragging)')
+        ).filter((item) => item.dataset.settingsSourceKind === dragState.sourceKind);
+
+        const previousOffsetTop = dragState.item.offsetTop;
+        const insertionTarget = siblingItems.find((item) => {
+            const rect = item.getBoundingClientRect();
+            return pointerY < rect.top + (rect.height / 2);
+        });
+
+        if (insertionTarget) {
+            dragState.list.insertBefore(dragState.item, insertionTarget);
+            dragState.baseShiftY += dragState.item.offsetTop - previousOffsetTop;
+            return;
+        }
+
+        dragState.list.appendChild(dragState.item);
+        dragState.baseShiftY += dragState.item.offsetTop - previousOffsetTop;
+    }
+
+    private autoScrollSettingsList(pointerY: number): void {
+        const dragState = this.settingsDragState;
+        if (!dragState) {
+            return;
+        }
+
+        const listRect = dragState.list.getBoundingClientRect();
+        const edgeInset = 52;
+        const maxStep = 14;
+        let scrollDelta = 0;
+
+        if (pointerY < listRect.top + edgeInset) {
+            const ratio = Math.max(0, (listRect.top + edgeInset - pointerY) / edgeInset);
+            scrollDelta = -Math.ceil(maxStep * ratio);
+        } else if (pointerY > listRect.bottom - edgeInset) {
+            const ratio = Math.max(0, (pointerY - (listRect.bottom - edgeInset)) / edgeInset);
+            scrollDelta = Math.ceil(maxStep * ratio);
+        }
+
+        if (scrollDelta !== 0) {
+            dragState.list.scrollTop += scrollDelta;
+        }
+    }
+
+    private persistDraggedItemOrder(): void {
+        const dragState = this.settingsDragState;
+        if (!dragState) {
+            return;
+        }
+
+        const orderedSourceIds = Array.from(
+            dragState.list.querySelectorAll<HTMLElement>('.settings-popover__item')
+        )
+            .filter((item) => item.dataset.settingsSourceKind === dragState.sourceKind)
+            .map((item) => item.dataset.settingsSourceId)
+            .filter((sourceId): sourceId is string => typeof sourceId === 'string');
+
+        setRasterSourceOrder(dragState.sourceKind, orderedSourceIds);
+        saveSourceCatalog(getSourceCatalogState());
+        this.refreshLayerSelectionMenu();
+        this.refreshSettingsLayersPanel();
+    }
+
+    private clearDraggedItemState(): void {
+        window.removeEventListener('pointermove', this.handleSettingsPointerMove);
+        window.removeEventListener('pointerup', this.handleSettingsPointerUp);
+        window.removeEventListener('pointercancel', this.handleSettingsPointerUp);
+
+        const dragState = this.settingsDragState;
+        if (dragState) {
+            dragState.item.classList.remove('is-dragging');
+            dragState.item.style.removeProperty('--sort-offset-y');
+            dragState.list.classList.remove('is-sorting');
+        }
+
+        document.body.classList.remove('is-sorting-layers');
+        this.settingsDragState = null;
+    }
+
+    private clearSwipeState(): void {
+        window.removeEventListener('pointermove', this.handleSettingsSwipeMove);
+        window.removeEventListener('pointerup', this.handleSettingsSwipeEnd);
+        window.removeEventListener('pointercancel', this.handleSettingsSwipeEnd);
+
+        const swipeState = this.settingsSwipeState;
+        if (swipeState) {
+            swipeState.item.classList.remove('is-swiping');
+            swipeState.item.style.removeProperty('--swipe-offset-x');
+        }
+
+        this.settingsSwipeState = null;
+    }
+
+    private async animateAndDeleteLayer(
+        sourceId: string,
+        deleteOrigin: HTMLElement,
+        initialOffsetX: number = 0
+    ): Promise<void> {
+        const item = deleteOrigin.closest<HTMLElement>('.settings-popover__item') ?? deleteOrigin;
+        if (item) {
+            item.classList.add('is-deleting');
+            const animation = item.animate([
+                { opacity: 1, transform: `translateX(${initialOffsetX}px) scale(1)` },
+                { opacity: 0, transform: 'translateX(-132px) scale(0.97)' }
+            ], {
+                duration: 220,
+                easing: 'cubic-bezier(0.22, 1, 0.36, 1)',
+                fill: 'forwards'
+            });
+
+            try {
+                await animation.finished;
+            } catch {
+                // Ignore aborted animations and continue with the delete.
+            }
+        }
+
+        await this.deleteLayer(sourceId);
+    }
+
+    private async deleteLayer(sourceId: string): Promise<void> {
+        const removedSource = deleteCustomRasterSource(sourceId);
+        if (!removedSource) {
+            return;
+        }
+
+        saveSourceCatalog(getSourceCatalogState());
+
+        const nextSettings = this.buildSettingsWithoutSource(sourceId, removedSource.type);
+        this.settings = nextSettings;
+        saveSettings(nextSettings);
+
+        if (removedSource.type === 'base') {
+            await this.ensureValidActiveBaseLayer(sourceId, nextSettings.enabledBaseLayerIds);
+        } else {
+            const nextOverlayIds = this.activeOverlayIds.filter((overlayId) => overlayId !== sourceId);
+            await this.mapController?.setOverlaySources(nextOverlayIds);
+        }
+
+        this.refreshLayerSelectionMenu();
+        this.refreshSettingsLayersPanel();
+    }
+
+    private buildSettingsWithoutSource(
+        sourceId: string,
+        sourceKind: 'base' | 'overlay'
+    ): AppSettings {
+        if (sourceKind === 'overlay') {
+            return {
+                ...this.settings,
+                enabledOverlayIds: this.settings.enabledOverlayIds.filter((id) => id !== sourceId)
+            };
+        }
+
+        let enabledBaseLayerIds = this.settings.enabledBaseLayerIds.filter((id) => id !== sourceId);
+        if (enabledBaseLayerIds.length === 0) {
+            const fallbackId = getBaseRasterSources()[0]?.id;
+            if (fallbackId) {
+                enabledBaseLayerIds = [fallbackId];
+            }
+        }
+
+        return {
+            ...this.settings,
+            enabledBaseLayerIds
+        };
+    }
+
+    private async ensureValidActiveBaseLayer(
+        removedSourceId: string,
+        enabledBaseLayerIds: readonly string[]
+    ): Promise<void> {
+        if (this.activeRasterSourceId !== removedSourceId) {
+            return;
+        }
+
+        const fallbackId = enabledBaseLayerIds[0] ?? getBaseRasterSources()[0]?.id;
+        if (fallbackId) {
+            this.activeRasterSourceId = fallbackId;
+            await this.mapController?.setRasterSource(fallbackId);
+        }
     }
 
     private readonly handleDocumentClick = (event: MouseEvent): void => {

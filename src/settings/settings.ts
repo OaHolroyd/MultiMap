@@ -1,7 +1,7 @@
 import {
-    DEFAULT_RASTER_SOURCE,
-    SOURCES_RASTER,
-    SOURCES_RASTER_OVERLAYS
+    getBaseRasterSources,
+    getDefaultSettingsBaseSourceId,
+    getOverlayRasterSources
 } from '../map/sources';
 import type { StorageMigrationResult } from '../storage/localStorage';
 
@@ -14,13 +14,12 @@ export interface AppSettings {
     readonly enabledOverlayIds: string[];
 }
 
-const DEFAULT_BASE_LAYER_IDS = SOURCES_RASTER.map((source) => source.id);
-const DEFAULT_OVERLAY_IDS = SOURCES_RASTER_OVERLAYS.map((source) => source.id);
-
-export const DEFAULT_SETTINGS: AppSettings = {
-    enabledBaseLayerIds: [...DEFAULT_BASE_LAYER_IDS],
-    enabledOverlayIds: [...DEFAULT_OVERLAY_IDS]
-};
+export function getDefaultSettings(): AppSettings {
+    return {
+        enabledBaseLayerIds: getBaseRasterSources().map((source) => source.id),
+        enabledOverlayIds: getOverlayRasterSources().map((source) => source.id)
+    };
+}
 
 export function cloneSettings(settings: AppSettings): AppSettings {
     return {
@@ -30,7 +29,7 @@ export function cloneSettings(settings: AppSettings): AppSettings {
 }
 
 export function migrateStorageShape(savedData: unknown): StorageMigrationResult<AppSettings> {
-    const defaultSettings = cloneSettings(DEFAULT_SETTINGS);
+    const defaultSettings = cloneSettings(getDefaultSettings());
 
     if (!isObject(savedData)) {
         return {
@@ -39,20 +38,23 @@ export function migrateStorageShape(savedData: unknown): StorageMigrationResult<
         };
     }
 
+    const defaultBaseLayerIds = getBaseRasterSources().map((source) => source.id);
+    const defaultOverlayIds = getOverlayRasterSources().map((source) => source.id);
+
     const enabledBaseLayerIds = filterKnownIds(
         savedData.enabledBaseLayerIds,
-        DEFAULT_BASE_LAYER_IDS
+        defaultBaseLayerIds
     );
     const enabledOverlayIds = filterKnownIds(
         savedData.enabledOverlayIds,
-        DEFAULT_OVERLAY_IDS
+        defaultOverlayIds
     );
 
     // The layer picker expects at least one base layer to remain available, so
     // persisted settings are normalized to keep a valid fallback.
     const normalizedBaseLayerIds = enabledBaseLayerIds.length > 0
         ? enabledBaseLayerIds
-        : [DEFAULT_RASTER_SOURCE.id];
+        : [getDefaultSettingsBaseSourceId()];
     const normalizedOverlayIds = enabledOverlayIds;
 
     const normalizedSettings: AppSettings = {

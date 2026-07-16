@@ -293,6 +293,31 @@ body {
     gap: 6px;
 }
 
+.settings-popover__actions {
+    display: flex;
+}
+
+.settings-popover__action-button {
+    min-height: 38px;
+    padding: 0 12px;
+    border: 0;
+    border-radius: 8px;
+    background: rgba(113, 196, 147, 0.18);
+    color: var(--control-text-color);
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background 140ms ease;
+}
+
+.settings-popover__action-button:hover {
+    background: rgba(113, 196, 147, 0.28);
+}
+
+.settings-popover__file-input {
+    display: none;
+}
+
 .settings-popover__section-label {
     font-size: 11px;
     font-weight: 700;
@@ -305,48 +330,133 @@ body {
     display: flex;
     flex-direction: column;
     gap: 6px;
+    overscroll-behavior: contain;
+}
+
+.settings-popover__item {
+    display: grid;
+    grid-template-columns: 38px minmax(0, 1fr) 38px;
+    align-items: stretch;
+    gap: 0;
+    overflow: hidden;
+    border-radius: 10px;
+    background: rgba(255, 255, 255, 0.06);
+    transform: translate3d(var(--swipe-offset-x, 0px), var(--sort-offset-y, 0px), 0);
+    transition: transform 180ms cubic-bezier(0.22, 1, 0.36, 1), opacity 180ms ease, filter 180ms ease, background 140ms ease, box-shadow 140ms ease;
+    will-change: transform;
+    touch-action: pan-y;
+}
+
+.settings-popover__item.is-enabled {
+    background: rgba(113, 196, 147, 0.12);
+    box-shadow: inset 0 0 0 1px rgba(113, 196, 147, 0.6), 0 0 0 1px rgba(113, 196, 147, 0.18);
+}
+
+.settings-popover__item.is-disabled {
+    color: rgba(247, 250, 248, 0.5);
+}
+
+.settings-popover__item:hover {
+    background: rgba(255, 255, 255, 0.1);
+}
+
+.settings-popover__item.is-enabled:hover {
+    background: rgba(113, 196, 147, 0.18);
+}
+
+.settings-popover__item.is-dragging {
+    z-index: 2;
+    opacity: 0.96;
+    filter: drop-shadow(0 10px 18px rgba(0, 0, 0, 0.22));
+    transition: none;
+}
+
+.settings-popover__item.is-swiping {
+    transition: none;
+}
+
+.settings-popover__handle,
+.settings-popover__delete-button,
+.settings-popover__delete-spacer {
+    display: grid;
+    place-items: center;
+    flex: 0 0 38px;
+    width: 38px;
+    min-height: 38px;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    color: rgba(247, 250, 248, 0.72);
+    cursor: pointer;
+    transition: background 140ms ease, color 140ms ease;
+}
+
+.settings-popover__handle {
+    cursor: grab;
+    touch-action: none;
+}
+
+.settings-popover__delete-spacer {
+    cursor: default;
+}
+
+.settings-popover__handle:hover,
+.settings-popover__delete-button:hover {
+    background: rgba(255, 255, 255, 0.08);
+    color: var(--control-text-color);
+}
+
+.settings-popover__handle:active {
+    cursor: grabbing;
+}
+
+.settings-popover__list.is-sorting .settings-popover__option,
+.settings-popover__list.is-sorting .settings-popover__handle,
+.settings-popover__list.is-sorting .settings-popover__delete-button {
+    transition: background 140ms ease, color 140ms ease, box-shadow 140ms ease;
 }
 
 .settings-popover__option {
     display: flex;
     align-items: center;
     gap: 10px;
-    width: 100%;
+    flex: 1;
+    width: auto;
     padding: 8px;
     border: 0;
-    border-radius: 8px;
-    background: rgba(255, 255, 255, 0.06);
+    background: transparent;
     color: inherit;
     text-align: left;
     cursor: pointer;
     transition: background 140ms ease, opacity 140ms ease;
 }
 
-.settings-popover__option.is-enabled {
-    background: rgba(113, 196, 147, 0.12);
-    box-shadow: inset 0 0 0 1px rgba(113, 196, 147, 0.6), 0 0 0 1px rgba(113, 196, 147, 0.18);
-}
-
-.settings-popover__option.is-disabled {
-    color: rgba(247, 250, 248, 0.5);
-}
-
-.settings-popover__option.is-disabled .layers-popover__option-label,
-.settings-popover__option.is-disabled .layers-popover__option-meta {
+.settings-popover__item.is-disabled .layers-popover__option-label,
+.settings-popover__item.is-disabled .layers-popover__option-meta {
     color: rgba(247, 250, 248, 0.48);
 }
 
-.settings-popover__option.is-disabled .layers-popover__preview {
+.settings-popover__item.is-disabled .layers-popover__preview {
     opacity: 0.6;
 }
 
 .settings-popover__option:hover {
-    background: rgba(255, 255, 255, 0.1);
+    background: transparent;
 }
 
 .settings-popover__option:disabled {
     opacity: 0.6;
     cursor: default;
+}
+
+.settings-popover__item.is-custom .settings-popover__delete-button {
+    color: rgba(255, 139, 139, 0.82);
+}
+
+.settings-popover__item.is-swiping .settings-popover__delete-button,
+.settings-popover__item.is-custom:hover .settings-popover__delete-button {
+    background: rgba(212, 62, 62, 0.14);
+    color: #ffd8d8;
 }
 
 .settings-popover__placeholder {
@@ -356,6 +466,17 @@ body {
     font-size: 13px;
     line-height: 1.45;
     color: rgba(247, 250, 248, 0.72);
+}
+
+.settings-popover__handle .map-action-icon,
+.settings-popover__delete-button .map-action-icon {
+    width: 18px;
+    height: 18px;
+}
+
+body.is-sorting-layers {
+    user-select: none;
+    -webkit-user-select: none;
 }
 
 .map-overlay-cluster.is-collapsed .map-secondary-controls {

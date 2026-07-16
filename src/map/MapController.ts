@@ -2,8 +2,9 @@ import maplibregl, { type Map } from 'maplibre-gl';
 
 import {
     DEFAULT_RASTER_SOURCE,
-    SOURCES_RASTER,
-    SOURCES_RASTER_OVERLAYS,
+    findRasterSourceById,
+    getBaseRasterSources,
+    getOverlayRasterSources,
     type RasterSourceConfig
 } from './sources';
 
@@ -63,7 +64,7 @@ export class MapController {
 
             this.applyRasterSource(this.activeRasterSource);
             this.activeOverlayIds.forEach((overlayId) => {
-                const overlaySource = SOURCES_RASTER_OVERLAYS.find((source) => source.id === overlayId);
+                const overlaySource = findRasterSourceById(overlayId);
                 if (overlaySource) {
                     this.applyRasterSource(overlaySource);
                 }
@@ -112,8 +113,8 @@ export class MapController {
     public async setRasterSource(sourceId: string): Promise<void> {
         await this.mapReadyPromise;
 
-        const nextSource = SOURCES_RASTER.find((source) => source.id === sourceId);
-        if (!nextSource || !this.map) {
+        const nextSource = findRasterSourceById(sourceId);
+        if (!nextSource || nextSource.type !== 'base' || !this.map) {
             return;
         }
 
@@ -130,8 +131,8 @@ export class MapController {
     public async toggleOverlaySource(sourceId: string): Promise<void> {
         await this.mapReadyPromise;
 
-        const overlaySource = SOURCES_RASTER_OVERLAYS.find((source) => source.id === sourceId);
-        if (!overlaySource || !this.map) {
+        const overlaySource = findRasterSourceById(sourceId);
+        if (!overlaySource || overlaySource.type !== 'overlay' || !this.map) {
             return;
         }
 
@@ -156,7 +157,7 @@ export class MapController {
         }
 
         const nextOverlayIds = sourceIds.filter((sourceId) =>
-            SOURCES_RASTER_OVERLAYS.some((source) => source.id === sourceId)
+            findRasterSourceById(sourceId)?.type === 'overlay'
         );
 
         // Removing stale overlays before adding new ones keeps the map style in
@@ -164,7 +165,7 @@ export class MapController {
         this.activeOverlayIds
             .filter((sourceId) => !nextOverlayIds.includes(sourceId))
             .forEach((sourceId) => {
-                const source = SOURCES_RASTER_OVERLAYS.find((overlay) => overlay.id === sourceId);
+                const source = findRasterSourceById(sourceId);
                 if (source) {
                     this.removeRasterSource(source);
                 }
@@ -173,7 +174,7 @@ export class MapController {
         nextOverlayIds
             .filter((sourceId) => !this.activeOverlayIds.includes(sourceId))
             .forEach((sourceId) => {
-                const source = SOURCES_RASTER_OVERLAYS.find((overlay) => overlay.id === sourceId);
+                const source = findRasterSourceById(sourceId);
                 if (source) {
                     this.applyRasterSource(source);
                 }
@@ -253,9 +254,7 @@ export class MapController {
             attribution: source.attribution
         });
 
-        const beforeLayerId = SOURCES_RASTER_OVERLAYS.some((overlay) => overlay.id === source.id)
-            ? undefined
-            : this.getFirstActiveOverlayLayerId();
+        const beforeLayerId = source.type === 'overlay' ? undefined : this.getFirstActiveOverlayLayerId();
 
         this.map.addLayer({
             id: source.layerId,
@@ -286,17 +285,18 @@ export class MapController {
             return;
         }
 
-        SOURCES_RASTER.forEach((source) => {
+        getBaseRasterSources().forEach((source) => {
             this.removeRasterSource(source);
         });
     }
 
     private resolveRasterSource(sourceId: string): RasterSourceConfig {
-        return SOURCES_RASTER.find((source) => source.id === sourceId) ?? DEFAULT_RASTER_SOURCE;
+        const source = findRasterSourceById(sourceId);
+        return source?.type === 'base' ? source : DEFAULT_RASTER_SOURCE;
     }
 
     private resolveOverlayIds(sourceIds: readonly string[]): string[] {
-        const validIds = new Set(SOURCES_RASTER_OVERLAYS.map((source) => source.id));
+        const validIds = new Set(getOverlayRasterSources().map((source) => source.id));
         const uniqueIds = new Set<string>();
 
         sourceIds.forEach((sourceId) => {
@@ -334,7 +334,7 @@ export class MapController {
         }
 
         for (const overlayId of this.activeOverlayIds) {
-            const overlaySource = SOURCES_RASTER_OVERLAYS.find((source) => source.id === overlayId);
+            const overlaySource = findRasterSourceById(overlayId);
             if (overlaySource && this.map.getLayer(overlaySource.layerId)) {
                 return overlaySource.layerId;
             }

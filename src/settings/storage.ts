@@ -1,5 +1,5 @@
 import {
-    DEFAULT_SETTINGS,
+    getDefaultSettings,
     SETTINGS_STORAGE_KEY,
     cloneSettings,
     migrateStorageShape,
@@ -10,7 +10,7 @@ import { loadStoredJson, saveStoredJson } from '../storage/localStorage';
 export function loadSettings(): AppSettings {
     return loadStoredJson({
         key: SETTINGS_STORAGE_KEY,
-        fallback: () => cloneSettings(DEFAULT_SETTINGS),
+        fallback: () => cloneSettings(getDefaultSettings()),
         migrate: migrateStorageShape
     });
 }

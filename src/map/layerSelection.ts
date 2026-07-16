@@ -1,7 +1,7 @@
 import {
-    DEFAULT_RASTER_SOURCE,
-    SOURCES_RASTER,
-    SOURCES_RASTER_OVERLAYS
+    getBaseRasterSources,
+    getDefaultSettingsBaseSourceId,
+    getOverlayRasterSources
 } from './sources';
 import type { AppSettings } from '../settings/settings';
 import type { StorageMigrationResult } from '../storage/localStorage';
@@ -22,7 +22,7 @@ export function cloneLayerSelection(selection: LayerSelectionState): LayerSelect
 
 export function getDefaultLayerSelection(settings: AppSettings): LayerSelectionState {
     return {
-        activeBaseLayerId: settings.enabledBaseLayerIds[0] ?? DEFAULT_RASTER_SOURCE.id,
+        activeBaseLayerId: settings.enabledBaseLayerIds[0] ?? getDefaultSettingsBaseSourceId(),
         activeOverlayIds: []
     };
 }
@@ -42,8 +42,8 @@ export function migrateLayerSelection(
 
     const enabledBaseLayerIds = new Set(settings.enabledBaseLayerIds);
     const enabledOverlayIds = new Set(settings.enabledOverlayIds);
-    const knownBaseLayerIds = SOURCES_RASTER.map((source) => source.id);
-    const knownOverlayIds = SOURCES_RASTER_OVERLAYS.map((source) => source.id);
+    const knownBaseLayerIds = getBaseRasterSources().map((source) => source.id);
+    const knownOverlayIds = getOverlayRasterSources().map((source) => source.id);
 
     const normalizedBaseLayerId = typeof savedData.activeBaseLayerId === 'string' &&
         knownBaseLayerIds.includes(savedData.activeBaseLayerId) &&
