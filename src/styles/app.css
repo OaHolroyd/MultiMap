@@ -1,9 +1,51 @@
 @import 'maplibre-gl/dist/maplibre-gl.css';
 
 :root {
-    color: #1b2421;
-    background: #dfe7df;
+    color-scheme: dark;
     font-family: Inter, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    --native-color-scheme: dark;
+    --color-page-bg: #20232a;
+    --color-app-bg: #282c34;
+    --color-surface-header: #161b22;
+    --color-surface-panel: #1c2025;
+    --color-surface-panel-alt: #21262d;
+    --color-surface-canvas: #0d1117;
+    --color-surface-node-hover: #262c36;
+    --color-surface-node-selected: #1f293d;
+    --color-tree-line-rgb: 48, 54, 61;
+    --color-suggestion-hover-bg: var(--color-surface-panel-alt);
+    --color-suggestion-active-bg: #313d4f;
+    --color-border-default: #30363d;
+    --color-border-muted: #323842;
+    --color-border-strong: #444c56;
+    --color-text-primary: #f0f6fc;
+    --color-text-secondary: #c9d1d9;
+    --color-text-muted: #8b949e;
+    --color-text-contrast: #ffffff;
+    --color-accent: #58a6ff;
+    --color-accent-hover: #79c0ff;
+    --color-accent-active: #1f6feb;
+    --color-accent-visited: #a5d6ff;
+    --color-success: #238636;
+    --color-success-hover: #2ea44f;
+    --color-success-active: #227e3b;
+    --color-danger: #da3637;
+    --color-danger-hover: #b82a2b;
+    --color-danger-soft: rgba(218, 54, 55, 0.15);
+    --color-danger-soft-hover: rgba(218, 54, 55, 0.3);
+    --color-danger-border: rgba(218, 54, 55, 0.4);
+    --color-warning: #f2c744;
+    --color-warning-soft: rgba(242, 199, 68, 0.15);
+    --color-warning-soft-hover: rgba(242, 199, 68, 0.3);
+    --color-warning-border: rgba(242, 199, 68, 0.4);
+    --color-count: #ff7b72;
+    --color-button-border: rgba(240, 246, 252, 0.1);
+    --color-overlay: rgba(0, 0, 0, 0.75);
+    --color-shadow-soft: rgba(0, 0, 0, 0.2);
+    --color-shadow-medium: rgba(0, 0, 0, 0.3);
+    --color-shadow-strong: rgba(0, 0, 0, 0.4);
+    --color-shadow-heavy: rgba(0, 0, 0, 0.5);
+    --color-glow-accent: rgba(88, 166, 255, 0.3);
     --safe-area-top: env(safe-area-inset-top, 0px);
     --safe-area-right: env(safe-area-inset-right, 0px);
     --safe-area-bottom: env(safe-area-inset-bottom, 0px);
@@ -13,13 +55,92 @@
     --sai-left: 0px;
     --sai-right: 0px;
     --map-control-edge-offset: 12px;
-    --control-text-color: #f7faf8;
-    --control-bg-color: rgba(24, 35, 30, 0.92);
-    --control-bg-color-hover: rgba(37, 51, 45, 0.96);
-    --control-focus-ring-color: #ffffff;
+    --control-gap: 6px;
+    --control-padding: 8px;
+    --control-radius: 8px;
+    --popover-radius: 10px;
+    --preview-radius: 6px;
+    --control-size: 44px;
+    --settings-side-control-size: 38px;
+    --control-text-color: var(--color-text-primary);
+    --control-text-color-muted: var(--color-text-secondary);
+    --control-text-color-subtle: var(--color-text-muted);
+    --control-text-color-disabled: color-mix(in srgb, var(--color-text-secondary) 72%, transparent);
+    --control-text-color-disabled-subtle: color-mix(in srgb, var(--color-text-muted) 88%, transparent);
+    --control-bg-color: var(--color-surface-header);
+    --control-bg-color-hover: var(--color-surface-panel-alt);
+    --popover-bg-color: var(--color-surface-canvas);
+    --surface-bg-color: var(--color-surface-panel-alt);
+    --surface-bg-color-hover: var(--color-surface-node-hover);
+    --surface-bg-color-pressed: var(--color-surface-node-selected);
+    --surface-bg-color-strong: color-mix(in srgb, var(--color-surface-panel-alt) 68%, var(--color-accent) 32%);
+    --surface-bg-color-strong-hover: color-mix(in srgb, var(--color-surface-panel-alt) 56%, var(--color-accent-hover) 44%);
+    --surface-bg-color-enabled: color-mix(in srgb, var(--color-surface-panel-alt) 72%, var(--color-accent) 28%);
+    --surface-bg-color-enabled-hover: color-mix(in srgb, var(--color-surface-panel-alt) 60%, var(--color-accent) 40%);
+    --surface-outline-color-enabled: color-mix(in srgb, var(--color-accent) 78%, var(--color-border-default) 22%);
+    --surface-outline-color-enabled-soft: color-mix(in srgb, var(--color-accent) 30%, var(--color-surface-panel-alt) 70%);
+    --surface-outline-color-active: color-mix(in srgb, var(--color-accent-hover) 62%, var(--color-border-default) 38%);
+    --surface-bg-color-delete: var(--color-danger-soft);
+    --surface-text-color-delete: var(--color-danger);
+    --surface-text-color-delete-hover: var(--color-text-contrast);
+    --surface-preview-bg-color: var(--color-surface-panel-alt);
+    --control-focus-ring-color: var(--color-accent-hover);
+    --shadow-popover: 0 18px 48px var(--color-shadow-strong);
+    --shadow-drag: drop-shadow(0 10px 18px var(--color-shadow-medium));
+    --transition-fast: 140ms ease;
+    --transition-medium: 180ms ease;
+    --transition-spring: 180ms cubic-bezier(0.22, 1, 0.36, 1);
     --user-location-marker-color: #1f74ff;
     --user-location-marker-border-color: #ffffff;
     --user-location-marker-glow-color: rgba(31, 116, 255, 0.18);
+}
+
+body[data-theme="light"] {
+    color-scheme: light;
+    --native-color-scheme: light;
+    --color-page-bg: #d7dee8;
+    --color-app-bg: #eef3f8;
+    --color-surface-header: #f8fbff;
+    --color-surface-panel: #eef2f7;
+    --color-surface-panel-alt: #ffffff;
+    --color-surface-canvas: #f4f7fb;
+    --color-surface-node-hover: #e9f2ff;
+    --color-surface-node-selected: #dbeafe;
+    --color-tree-line-rgb: 174, 185, 198;
+    --color-suggestion-hover-bg: #e3edff;
+    --color-suggestion-active-bg: #c3d9ff;
+    --color-suggestion-active-text: #0b3d91;
+    --color-border-default: #c7d1dc;
+    --color-border-muted: #d2dae4;
+    --color-border-strong: #aeb9c6;
+    --color-text-primary: #18212b;
+    --color-text-secondary: #334155;
+    --color-text-muted: #526173;
+    --color-text-contrast: #ffffff;
+    --color-accent: #0969da;
+    --color-accent-hover: #218bff;
+    --color-accent-active: #0550ae;
+    --color-accent-visited: #6f42c1;
+    --color-success: #1a7f37;
+    --color-success-hover: #2da44e;
+    --color-success-active: #116329;
+    --color-danger: #cf222e;
+    --color-danger-hover: #a40e26;
+    --color-danger-soft: rgba(207, 34, 46, 0.1);
+    --color-danger-soft-hover: rgba(207, 34, 46, 0.18);
+    --color-danger-border: rgba(207, 34, 46, 0.28);
+    --color-warning: #9a6700;
+    --color-warning-soft: rgba(154, 103, 0, 0.12);
+    --color-warning-soft-hover: rgba(154, 103, 0, 0.2);
+    --color-warning-border: rgba(154, 103, 0, 0.28);
+    --color-count: #cf222e;
+    --color-button-border: rgba(27, 31, 36, 0.12);
+    --color-overlay: rgba(15, 23, 42, 0.35);
+    --color-shadow-soft: rgba(15, 23, 42, 0.08);
+    --color-shadow-medium: rgba(15, 23, 42, 0.12);
+    --color-shadow-strong: rgba(15, 23, 42, 0.16);
+    --color-shadow-heavy: rgba(15, 23, 42, 0.18);
+    --color-glow-accent: rgba(9, 105, 218, 0.2);
 }
 
 /* ========================= */
@@ -35,6 +156,8 @@ body {
 
 body {
     overflow: hidden;
+    background: var(--color-page-bg);
+    color: var(--color-text-primary);
 }
 
 #app {
@@ -85,16 +208,16 @@ body {
 }
 
 .map-overlay-cluster--bottom-right > .map-action-button + .map-action-button {
-    margin-top: 6px;
+    margin-top: var(--control-gap);
 }
 
 .map-secondary-controls {
     display: grid;
     grid-template-rows: 1fr;
-    margin-top: 6px;
+    margin-top: var(--control-gap);
     opacity: 1;
     overflow: hidden;
-    transition: grid-template-rows 180ms ease, margin-top 180ms ease, opacity 180ms ease;
+    transition: grid-template-rows var(--transition-medium), margin-top var(--transition-medium), opacity var(--transition-medium);
 }
 
 .map-secondary-controls > * {
@@ -104,7 +227,7 @@ body {
 .map-secondary-controls__content {
     display: flex;
     flex-direction: column;
-    gap: 6px;
+    gap: var(--control-gap);
     align-items: center;
 }
 
@@ -115,14 +238,14 @@ body {
     flex-direction: column;
     max-height: calc(100dvh - var(--safe-area-top) - var(--safe-area-bottom) - 24px);
     padding: 10px;
-    border-radius: 10px;
-    background: rgba(20, 28, 24, 0.96);
+    border-radius: var(--popover-radius);
+    background: var(--popover-bg-color);
     color: var(--control-text-color);
     opacity: 0;
     transform: translateY(8px) scale(0.98);
     pointer-events: none;
-    box-shadow: 0 18px 48px rgba(0, 0, 0, 0.28);
-    transition: opacity 140ms ease, transform 140ms ease;
+    box-shadow: var(--shadow-popover);
+    transition: opacity var(--transition-fast), transform var(--transition-fast);
 }
 
 .map-popover.is-open {
@@ -149,30 +272,30 @@ body {
     font-weight: 700;
     text-transform: uppercase;
     letter-spacing: 0.04em;
-    color: rgba(247, 250, 248, 0.72);
+    color: var(--control-text-color-muted);
 }
 
 .layers-popover__tabs {
     display: grid;
     grid-template-columns: 1fr 1fr;
-    gap: 6px;
+    gap: var(--control-gap);
     margin-bottom: 8px;
 }
 
 .layers-popover__tab {
     padding: 8px 10px;
     border: 0;
-    border-radius: 8px;
-    background: rgba(255, 255, 255, 0.06);
-    color: rgba(247, 250, 248, 0.72);
+    border-radius: var(--control-radius);
+    background: var(--surface-bg-color);
+    color: var(--control-text-color-muted);
     font-size: 12px;
     font-weight: 600;
     cursor: pointer;
-    transition: background 140ms ease, color 140ms ease;
+    transition: background var(--transition-fast), color var(--transition-fast);
 }
 
 .layers-popover__tab.is-active {
-    background: rgba(113, 196, 147, 0.18);
+    background: var(--surface-bg-color-strong);
     color: var(--control-text-color);
 }
 
@@ -203,7 +326,7 @@ body {
     display: flex;
     flex: 1;
     flex-direction: column;
-    gap: 6px;
+    gap: var(--control-gap);
     min-height: 0;
     overflow-y: auto;
 }
@@ -213,32 +336,32 @@ body {
     align-items: center;
     gap: 10px;
     width: 100%;
-    padding: 8px;
+    padding: var(--control-padding);
     border: 0;
-    border-radius: 8px;
-    background: rgba(255, 255, 255, 0.06);
+    border-radius: var(--control-radius);
+    background: var(--surface-bg-color);
     color: inherit;
     text-align: left;
     cursor: pointer;
-    transition: background 140ms ease, transform 140ms ease;
+    transition: background var(--transition-fast), transform var(--transition-fast);
 }
 
 .layers-popover__option:hover {
-    background: rgba(255, 255, 255, 0.1);
+    background: var(--surface-bg-color-hover);
 }
 
 .layers-popover__option.is-active {
-    background: rgba(113, 196, 147, 0.18);
-    outline: 1px solid rgba(113, 196, 147, 0.45);
+    background: var(--surface-bg-color-strong);
+    outline: 1px solid var(--surface-outline-color-active);
 }
 
 .layers-popover__preview {
     flex: 0 0 56px;
     width: 56px;
     height: 56px;
-    border-radius: 6px;
+    border-radius: var(--preview-radius);
     object-fit: cover;
-    background: rgba(255, 255, 255, 0.08);
+    background: var(--surface-preview-bg-color);
 }
 
 .layers-popover__option-copy {
@@ -258,13 +381,13 @@ body {
 .layers-popover__option-meta {
     font-size: 11px;
     line-height: 1.35;
-    color: rgba(247, 250, 248, 0.62);
+    color: var(--control-text-color-subtle);
 }
 
 .settings-popover__tabs {
     display: grid;
     grid-template-columns: repeat(4, 1fr);
-    gap: 6px;
+    gap: var(--control-gap);
     margin-bottom: 8px;
 }
 
@@ -275,22 +398,22 @@ body {
     min-height: 40px;
     padding: 0;
     border: 0;
-    border-radius: 8px;
-    background: rgba(255, 255, 255, 0.06);
-    color: rgba(247, 250, 248, 0.72);
+    border-radius: var(--control-radius);
+    background: var(--surface-bg-color);
+    color: var(--control-text-color-muted);
     cursor: pointer;
-    transition: background 140ms ease, color 140ms ease;
+    transition: background var(--transition-fast), color var(--transition-fast);
 }
 
 .settings-popover__tab.is-active {
-    background: rgba(113, 196, 147, 0.18);
+    background: var(--surface-bg-color-strong);
     color: var(--control-text-color);
 }
 
 .settings-popover__section {
     display: flex;
     flex-direction: column;
-    gap: 6px;
+    gap: var(--control-gap);
 }
 
 .settings-popover__actions {
@@ -298,20 +421,20 @@ body {
 }
 
 .settings-popover__action-button {
-    min-height: 38px;
+    min-height: var(--settings-side-control-size);
     padding: 0 12px;
     border: 0;
-    border-radius: 8px;
-    background: rgba(113, 196, 147, 0.18);
+    border-radius: var(--control-radius);
+    background: var(--surface-bg-color-strong);
     color: var(--control-text-color);
     font-size: 13px;
     font-weight: 600;
     cursor: pointer;
-    transition: background 140ms ease;
+    transition: background var(--transition-fast);
 }
 
 .settings-popover__action-button:hover {
-    background: rgba(113, 196, 147, 0.28);
+    background: var(--surface-bg-color-strong-hover);
 }
 
 .settings-popover__file-input {
@@ -323,51 +446,51 @@ body {
     font-weight: 700;
     text-transform: uppercase;
     letter-spacing: 0.04em;
-    color: rgba(247, 250, 248, 0.62);
+    color: var(--control-text-color-subtle);
 }
 
 .settings-popover__list {
     display: flex;
     flex-direction: column;
-    gap: 6px;
+    gap: var(--control-gap);
     overscroll-behavior: contain;
 }
 
 .settings-popover__item {
     display: grid;
-    grid-template-columns: 38px minmax(0, 1fr) 38px;
+    grid-template-columns: var(--settings-side-control-size) minmax(0, 1fr) var(--settings-side-control-size);
     align-items: stretch;
     gap: 0;
     overflow: hidden;
-    border-radius: 10px;
-    background: rgba(255, 255, 255, 0.06);
+    border-radius: var(--popover-radius);
+    background: var(--surface-bg-color);
     transform: translate3d(var(--swipe-offset-x, 0px), var(--sort-offset-y, 0px), 0);
-    transition: transform 180ms cubic-bezier(0.22, 1, 0.36, 1), opacity 180ms ease, filter 180ms ease, background 140ms ease, box-shadow 140ms ease;
+    transition: transform var(--transition-spring), opacity var(--transition-medium), filter var(--transition-medium), background var(--transition-fast), box-shadow var(--transition-fast);
     will-change: transform;
     touch-action: pan-y;
 }
 
 .settings-popover__item.is-enabled {
-    background: rgba(113, 196, 147, 0.12);
-    box-shadow: inset 0 0 0 1px rgba(113, 196, 147, 0.6), 0 0 0 1px rgba(113, 196, 147, 0.18);
+    background: var(--surface-bg-color-enabled);
+    box-shadow: inset 0 0 0 1px var(--surface-outline-color-enabled), 0 0 0 1px var(--surface-outline-color-enabled-soft);
 }
 
 .settings-popover__item.is-disabled {
-    color: rgba(247, 250, 248, 0.5);
+    color: var(--control-text-color-disabled);
 }
 
 .settings-popover__item:hover {
-    background: rgba(255, 255, 255, 0.1);
+    background: var(--surface-bg-color-hover);
 }
 
 .settings-popover__item.is-enabled:hover {
-    background: rgba(113, 196, 147, 0.18);
+    background: var(--surface-bg-color-enabled-hover);
 }
 
 .settings-popover__item.is-dragging {
     z-index: 2;
     opacity: 0.96;
-    filter: drop-shadow(0 10px 18px rgba(0, 0, 0, 0.22));
+    filter: var(--shadow-drag);
     transition: none;
 }
 
@@ -381,14 +504,14 @@ body {
     display: grid;
     place-items: center;
     flex: 0 0 38px;
-    width: 38px;
-    min-height: 38px;
+    width: var(--settings-side-control-size);
+    min-height: var(--settings-side-control-size);
     padding: 0;
     border: 0;
     background: transparent;
-    color: rgba(247, 250, 248, 0.72);
+    color: var(--control-text-color-muted);
     cursor: pointer;
-    transition: background 140ms ease, color 140ms ease;
+    transition: background var(--transition-fast), color var(--transition-fast);
 }
 
 .settings-popover__handle {
@@ -402,7 +525,7 @@ body {
 
 .settings-popover__handle:hover,
 .settings-popover__delete-button:hover {
-    background: rgba(255, 255, 255, 0.08);
+    background: var(--surface-bg-color-pressed);
     color: var(--control-text-color);
 }
 
@@ -413,7 +536,7 @@ body {
 .settings-popover__list.is-sorting .settings-popover__option,
 .settings-popover__list.is-sorting .settings-popover__handle,
 .settings-popover__list.is-sorting .settings-popover__delete-button {
-    transition: background 140ms ease, color 140ms ease, box-shadow 140ms ease;
+    transition: background var(--transition-fast), color var(--transition-fast), box-shadow var(--transition-fast);
 }
 
 .settings-popover__option {
@@ -422,18 +545,18 @@ body {
     gap: 10px;
     flex: 1;
     width: auto;
-    padding: 8px;
+    padding: var(--control-padding);
     border: 0;
     background: transparent;
     color: inherit;
     text-align: left;
     cursor: pointer;
-    transition: background 140ms ease, opacity 140ms ease;
+    transition: background var(--transition-fast), opacity var(--transition-fast);
 }
 
 .settings-popover__item.is-disabled .layers-popover__option-label,
 .settings-popover__item.is-disabled .layers-popover__option-meta {
-    color: rgba(247, 250, 248, 0.48);
+    color: var(--control-text-color-disabled-subtle);
 }
 
 .settings-popover__item.is-disabled .layers-popover__preview {
@@ -450,22 +573,22 @@ body {
 }
 
 .settings-popover__item.is-custom .settings-popover__delete-button {
-    color: rgba(255, 139, 139, 0.82);
+    color: var(--surface-text-color-delete);
 }
 
 .settings-popover__item.is-swiping .settings-popover__delete-button,
 .settings-popover__item.is-custom:hover .settings-popover__delete-button {
-    background: rgba(212, 62, 62, 0.14);
-    color: #ffd8d8;
+    background: var(--surface-bg-color-delete);
+    color: var(--surface-text-color-delete-hover);
 }
 
 .settings-popover__placeholder {
     padding: 12px;
-    border-radius: 8px;
-    background: rgba(255, 255, 255, 0.06);
+    border-radius: var(--control-radius);
+    background: var(--surface-bg-color);
     font-size: 13px;
     line-height: 1.45;
-    color: rgba(247, 250, 248, 0.72);
+    color: var(--control-text-color-muted);
 }
 
 .settings-popover__handle .map-action-icon,
@@ -489,15 +612,15 @@ body.is-sorting-layers {
 .map-action-button {
     display: grid;
     place-items: center;
-    width: 44px;
-    height: 44px;
+    width: var(--control-size);
+    height: var(--control-size);
     padding: 0;
     border: 0;
     border-radius: 999px;
     background: var(--control-bg-color);
     color: var(--control-text-color);
     cursor: pointer;
-    transition: transform 140ms ease, opacity 140ms ease, background 140ms ease;
+    transition: transform var(--transition-fast), opacity var(--transition-fast), background var(--transition-fast);
 }
 
 .map-action-button:disabled {
