@@ -1,6 +1,12 @@
 import maplibregl, { type Map } from 'maplibre-gl';
 
-import { DEFAULT_RASTER_SOURCE } from './sources';
+import {
+    DEFAULT_RASTER_SOURCE,
+    findRasterSourceById,
+    getBaseRasterSources,
+    getOverlayRasterSources,
+    type RasterSourceConfig
+} from './sources';
 
 export class MapController {
     private readonly container: HTMLElement;
@@ -9,13 +15,25 @@ export class MapController {
     private readonly mapReadyPromise: Promise<void>;
     private resolveMapReady: (() => void) | null;
     private readonly bearingChangeListeners: Array<(bearing: number) => void>;
+    private readonly activeSourceChangeListeners: Array<(source: RasterSourceConfig) => void>;
+    private readonly activeOverlayChangeListeners: Array<(overlayIds: readonly string[]) => void>;
+    private activeRasterSource: RasterSourceConfig;
+    private activeOverlayIds: string[];
 
-    constructor(container: HTMLElement) {
+    constructor(
+        container: HTMLElement,
+        initialRasterSourceId: string = DEFAULT_RASTER_SOURCE.id,
+        initialOverlayIds: readonly string[] = []
+    ) {
         this.container = container;
         this.map = null;
         this.userLocationMarker = null;
         this.resolveMapReady = null;
         this.bearingChangeListeners = [];
+        this.activeSourceChangeListeners = [];
+        this.activeOverlayChangeListeners = [];
+        this.activeRasterSource = this.resolveRasterSource(initialRasterSourceId);
+        this.activeOverlayIds = this.resolveOverlayIds(initialOverlayIds);
         this.mapReadyPromise = new Promise((resolve) => {
             this.resolveMapReady = resolve;
         });
@@ -44,22 +62,19 @@ export class MapController {
                 return;
             }
 
-            this.map.addSource(DEFAULT_RASTER_SOURCE.id, {
-                type: 'raster',
-                tiles: [...DEFAULT_RASTER_SOURCE.tiles],
-                tileSize: DEFAULT_RASTER_SOURCE.tileSize,
-                attribution: DEFAULT_RASTER_SOURCE.attribution
-            });
-
-            this.map.addLayer({
-                id: DEFAULT_RASTER_SOURCE.layerId,
-                type: 'raster',
-                source: DEFAULT_RASTER_SOURCE.id
+            this.applyRasterSource(this.activeRasterSource);
+            this.activeOverlayIds.forEach((overlayId) => {
+                const overlaySource = findRasterSourceById(overlayId);
+                if (overlaySource) {
+                    this.applyRasterSource(overlaySource);
+                }
             });
 
             this.resolveMapReady?.();
             this.resolveMapReady = null;
             this.notifyBearingChange();
+            this.notifyActiveSourceChange();
+            this.notifyActiveOverlayChange();
         });
 
         // The shell needs to know when the map is rotated so it can surface a
@@ -83,6 +98,90 @@ export class MapController {
             duration: 250,
             essential: true
         });
+    }
+
+    public onActiveSourceChange(listener: (source: RasterSourceConfig) => void): void {
+        this.activeSourceChangeListeners.push(listener);
+        listener(this.activeRasterSource);
+    }
+
+    public onActiveOverlaysChange(listener: (overlayIds: readonly string[]) => void): void {
+        this.activeOverlayChangeListeners.push(listener);
+        listener([...this.activeOverlayIds]);
+    }
+
+    public async setRasterSource(sourceId: string): Promise<void> {
+        await this.mapReadyPromise;
+
+        const nextSource = findRasterSourceById(sourceId);
+        if (!nextSource || nextSource.type !== 'base' || !this.map) {
+            return;
+        }
+
+        this.activeRasterSource = nextSource;
+
+        // Clear all known base raster layers before adding the next one. This
+        // is more robust than only removing the previously tracked source,
+        // because it guarantees the style cannot drift into a stacked state.
+        this.removeAllRasterSources();
+        this.applyRasterSource(nextSource);
+        this.notifyActiveSourceChange();
+    }
+
+    public async toggleOverlaySource(sourceId: string): Promise<void> {
+        await this.mapReadyPromise;
+
+        const overlaySource = findRasterSourceById(sourceId);
+        if (!overlaySource || overlaySource.type !== 'overlay' || !this.map) {
+            return;
+        }
+
+        const isActive = this.activeOverlayIds.includes(sourceId);
+
+        if (isActive) {
+            this.removeRasterSource(overlaySource);
+            this.activeOverlayIds = this.activeOverlayIds.filter((id) => id !== sourceId);
+        } else {
+            this.applyRasterSource(overlaySource);
+            this.activeOverlayIds = [...this.activeOverlayIds, sourceId];
+        }
+
+        this.notifyActiveOverlayChange();
+    }
+
+    public async setOverlaySources(sourceIds: readonly string[]): Promise<void> {
+        await this.mapReadyPromise;
+
+        if (!this.map) {
+            return;
+        }
+
+        const nextOverlayIds = sourceIds.filter((sourceId) =>
+            findRasterSourceById(sourceId)?.type === 'overlay'
+        );
+
+        // Removing stale overlays before adding new ones keeps the map style in
+        // sync with the requested overlay set without disturbing base layers.
+        this.activeOverlayIds
+            .filter((sourceId) => !nextOverlayIds.includes(sourceId))
+            .forEach((sourceId) => {
+                const source = findRasterSourceById(sourceId);
+                if (source) {
+                    this.removeRasterSource(source);
+                }
+            });
+
+        nextOverlayIds
+            .filter((sourceId) => !this.activeOverlayIds.includes(sourceId))
+            .forEach((sourceId) => {
+                const source = findRasterSourceById(sourceId);
+                if (source) {
+                    this.applyRasterSource(source);
+                }
+            });
+
+        this.activeOverlayIds = [...nextOverlayIds];
+        this.notifyActiveOverlayChange();
     }
 
     public async zoomToUserPosition(): Promise<void> {
@@ -140,11 +239,108 @@ export class MapController {
             .addTo(this.map);
     }
 
+    private applyRasterSource(source: RasterSourceConfig): void {
+        if (!this.map) {
+            return;
+        }
+
+        this.map.addSource(source.id, {
+            type: 'raster',
+            tiles: [...source.tiles],
+            tileSize: source.tileSize,
+            minzoom: source.zlims[0],
+            maxzoom: source.zlims[1],
+            bounds: source.bounds || [-180,-85.051129,180,85.051129],
+            attribution: source.attribution
+        });
+
+        const beforeLayerId = source.type === 'overlay' ? undefined : this.getFirstActiveOverlayLayerId();
+
+        this.map.addLayer({
+            id: source.layerId,
+            type: 'raster',
+            source: source.id,
+            paint: {
+              'raster-opacity': source.opacity
+            }
+        }, beforeLayerId);
+    }
+
+    private removeRasterSource(source: RasterSourceConfig): void {
+        if (!this.map) {
+            return;
+        }
+
+        if (this.map.getLayer(source.layerId)) {
+            this.map.removeLayer(source.layerId);
+        }
+
+        if (this.map.getSource(source.id)) {
+            this.map.removeSource(source.id);
+        }
+    }
+
+    private removeAllRasterSources(): void {
+        if (!this.map) {
+            return;
+        }
+
+        getBaseRasterSources().forEach((source) => {
+            this.removeRasterSource(source);
+        });
+    }
+
+    private resolveRasterSource(sourceId: string): RasterSourceConfig {
+        const source = findRasterSourceById(sourceId);
+        return source?.type === 'base' ? source : DEFAULT_RASTER_SOURCE;
+    }
+
+    private resolveOverlayIds(sourceIds: readonly string[]): string[] {
+        const validIds = new Set(getOverlayRasterSources().map((source) => source.id));
+        const uniqueIds = new Set<string>();
+
+        sourceIds.forEach((sourceId) => {
+            if (validIds.has(sourceId)) {
+                uniqueIds.add(sourceId);
+            }
+        });
+
+        return [...uniqueIds];
+    }
+
     private notifyBearingChange(): void {
         const bearing = this.getNormalizedBearing();
         this.bearingChangeListeners.forEach((listener) => {
             listener(bearing);
         });
+    }
+
+    private notifyActiveSourceChange(): void {
+        this.activeSourceChangeListeners.forEach((listener) => {
+            listener(this.activeRasterSource);
+        });
+    }
+
+    private notifyActiveOverlayChange(): void {
+        const activeOverlayIds = [...this.activeOverlayIds];
+        this.activeOverlayChangeListeners.forEach((listener) => {
+            listener(activeOverlayIds);
+        });
+    }
+
+    private getFirstActiveOverlayLayerId(): string | undefined {
+        if (!this.map) {
+            return undefined;
+        }
+
+        for (const overlayId of this.activeOverlayIds) {
+            const overlaySource = findRasterSourceById(overlayId);
+            if (overlaySource && this.map.getLayer(overlaySource.layerId)) {
+                return overlaySource.layerId;
+            }
+        }
+
+        return undefined;
     }
 
     private getNormalizedBearing(): number {

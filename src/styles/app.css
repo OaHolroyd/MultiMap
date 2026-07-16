@@ -22,6 +22,10 @@
     --user-location-marker-glow-color: rgba(31, 116, 255, 0.18);
 }
 
+/* ========================= */
+/* FULL-SCREEN APP CONTAINER */
+/* ========================= */
+
 html,
 body {
     width: 100%;
@@ -52,6 +56,10 @@ body {
     position: absolute;
     inset: 0;
 }
+
+/* ============================= */
+/* MAP OVERLAY (control buttons) */
+/* ============================= */
 
 .map-overlay-cluster {
     position: absolute;
@@ -100,6 +108,377 @@ body {
     align-items: center;
 }
 
+.map-popover {
+    position: absolute;
+    z-index: 3;
+    display: flex;
+    flex-direction: column;
+    max-height: calc(100dvh - var(--safe-area-top) - var(--safe-area-bottom) - 24px);
+    padding: 10px;
+    border-radius: 10px;
+    background: rgba(20, 28, 24, 0.96);
+    color: var(--control-text-color);
+    opacity: 0;
+    transform: translateY(8px) scale(0.98);
+    pointer-events: none;
+    box-shadow: 0 18px 48px rgba(0, 0, 0, 0.28);
+    transition: opacity 140ms ease, transform 140ms ease;
+}
+
+.map-popover.is-open {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+    pointer-events: auto;
+}
+
+.layers-popover {
+    right: 54px;
+    bottom: 50px;
+    width: 260px;
+}
+
+.settings-popover {
+    right: 54px;
+    bottom: 0;
+    width: 320px;
+}
+
+.layers-popover__header {
+    margin-bottom: 8px;
+    font-size: 12px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: rgba(247, 250, 248, 0.72);
+}
+
+.layers-popover__tabs {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 6px;
+    margin-bottom: 8px;
+}
+
+.layers-popover__tab {
+    padding: 8px 10px;
+    border: 0;
+    border-radius: 8px;
+    background: rgba(255, 255, 255, 0.06);
+    color: rgba(247, 250, 248, 0.72);
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background 140ms ease, color 140ms ease;
+}
+
+.layers-popover__tab.is-active {
+    background: rgba(113, 196, 147, 0.18);
+    color: var(--control-text-color);
+}
+
+.layers-popover__panel {
+    display: none;
+    min-height: 0;
+}
+
+.layers-popover__panel.is-active {
+    display: flex;
+    flex: 1;
+}
+
+.settings-popover__panel {
+    display: none;
+    min-height: 0;
+    overflow-y: auto;
+}
+
+.settings-popover__panel.is-active {
+    display: flex;
+    flex: 1;
+    flex-direction: column;
+    gap: 12px;
+}
+
+.layers-popover__list {
+    display: flex;
+    flex: 1;
+    flex-direction: column;
+    gap: 6px;
+    min-height: 0;
+    overflow-y: auto;
+}
+
+.layers-popover__option {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    width: 100%;
+    padding: 8px;
+    border: 0;
+    border-radius: 8px;
+    background: rgba(255, 255, 255, 0.06);
+    color: inherit;
+    text-align: left;
+    cursor: pointer;
+    transition: background 140ms ease, transform 140ms ease;
+}
+
+.layers-popover__option:hover {
+    background: rgba(255, 255, 255, 0.1);
+}
+
+.layers-popover__option.is-active {
+    background: rgba(113, 196, 147, 0.18);
+    outline: 1px solid rgba(113, 196, 147, 0.45);
+}
+
+.layers-popover__preview {
+    flex: 0 0 56px;
+    width: 56px;
+    height: 56px;
+    border-radius: 6px;
+    object-fit: cover;
+    background: rgba(255, 255, 255, 0.08);
+}
+
+.layers-popover__option-copy {
+    display: flex;
+    flex: 1;
+    min-width: 0;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 2px;
+}
+
+.layers-popover__option-label {
+    font-size: 13px;
+    font-weight: 600;
+}
+
+.layers-popover__option-meta {
+    font-size: 11px;
+    line-height: 1.35;
+    color: rgba(247, 250, 248, 0.62);
+}
+
+.settings-popover__tabs {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 6px;
+    margin-bottom: 8px;
+}
+
+.settings-popover__tab {
+    display: grid;
+    place-items: center;
+    width: 100%;
+    min-height: 40px;
+    padding: 0;
+    border: 0;
+    border-radius: 8px;
+    background: rgba(255, 255, 255, 0.06);
+    color: rgba(247, 250, 248, 0.72);
+    cursor: pointer;
+    transition: background 140ms ease, color 140ms ease;
+}
+
+.settings-popover__tab.is-active {
+    background: rgba(113, 196, 147, 0.18);
+    color: var(--control-text-color);
+}
+
+.settings-popover__section {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.settings-popover__actions {
+    display: flex;
+}
+
+.settings-popover__action-button {
+    min-height: 38px;
+    padding: 0 12px;
+    border: 0;
+    border-radius: 8px;
+    background: rgba(113, 196, 147, 0.18);
+    color: var(--control-text-color);
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: background 140ms ease;
+}
+
+.settings-popover__action-button:hover {
+    background: rgba(113, 196, 147, 0.28);
+}
+
+.settings-popover__file-input {
+    display: none;
+}
+
+.settings-popover__section-label {
+    font-size: 11px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: rgba(247, 250, 248, 0.62);
+}
+
+.settings-popover__list {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    overscroll-behavior: contain;
+}
+
+.settings-popover__item {
+    display: grid;
+    grid-template-columns: 38px minmax(0, 1fr) 38px;
+    align-items: stretch;
+    gap: 0;
+    overflow: hidden;
+    border-radius: 10px;
+    background: rgba(255, 255, 255, 0.06);
+    transform: translate3d(var(--swipe-offset-x, 0px), var(--sort-offset-y, 0px), 0);
+    transition: transform 180ms cubic-bezier(0.22, 1, 0.36, 1), opacity 180ms ease, filter 180ms ease, background 140ms ease, box-shadow 140ms ease;
+    will-change: transform;
+    touch-action: pan-y;
+}
+
+.settings-popover__item.is-enabled {
+    background: rgba(113, 196, 147, 0.12);
+    box-shadow: inset 0 0 0 1px rgba(113, 196, 147, 0.6), 0 0 0 1px rgba(113, 196, 147, 0.18);
+}
+
+.settings-popover__item.is-disabled {
+    color: rgba(247, 250, 248, 0.5);
+}
+
+.settings-popover__item:hover {
+    background: rgba(255, 255, 255, 0.1);
+}
+
+.settings-popover__item.is-enabled:hover {
+    background: rgba(113, 196, 147, 0.18);
+}
+
+.settings-popover__item.is-dragging {
+    z-index: 2;
+    opacity: 0.96;
+    filter: drop-shadow(0 10px 18px rgba(0, 0, 0, 0.22));
+    transition: none;
+}
+
+.settings-popover__item.is-swiping {
+    transition: none;
+}
+
+.settings-popover__handle,
+.settings-popover__delete-button,
+.settings-popover__delete-spacer {
+    display: grid;
+    place-items: center;
+    flex: 0 0 38px;
+    width: 38px;
+    min-height: 38px;
+    padding: 0;
+    border: 0;
+    background: transparent;
+    color: rgba(247, 250, 248, 0.72);
+    cursor: pointer;
+    transition: background 140ms ease, color 140ms ease;
+}
+
+.settings-popover__handle {
+    cursor: grab;
+    touch-action: none;
+}
+
+.settings-popover__delete-spacer {
+    cursor: default;
+}
+
+.settings-popover__handle:hover,
+.settings-popover__delete-button:hover {
+    background: rgba(255, 255, 255, 0.08);
+    color: var(--control-text-color);
+}
+
+.settings-popover__handle:active {
+    cursor: grabbing;
+}
+
+.settings-popover__list.is-sorting .settings-popover__option,
+.settings-popover__list.is-sorting .settings-popover__handle,
+.settings-popover__list.is-sorting .settings-popover__delete-button {
+    transition: background 140ms ease, color 140ms ease, box-shadow 140ms ease;
+}
+
+.settings-popover__option {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex: 1;
+    width: auto;
+    padding: 8px;
+    border: 0;
+    background: transparent;
+    color: inherit;
+    text-align: left;
+    cursor: pointer;
+    transition: background 140ms ease, opacity 140ms ease;
+}
+
+.settings-popover__item.is-disabled .layers-popover__option-label,
+.settings-popover__item.is-disabled .layers-popover__option-meta {
+    color: rgba(247, 250, 248, 0.48);
+}
+
+.settings-popover__item.is-disabled .layers-popover__preview {
+    opacity: 0.6;
+}
+
+.settings-popover__option:hover {
+    background: transparent;
+}
+
+.settings-popover__option:disabled {
+    opacity: 0.6;
+    cursor: default;
+}
+
+.settings-popover__item.is-custom .settings-popover__delete-button {
+    color: rgba(255, 139, 139, 0.82);
+}
+
+.settings-popover__item.is-swiping .settings-popover__delete-button,
+.settings-popover__item.is-custom:hover .settings-popover__delete-button {
+    background: rgba(212, 62, 62, 0.14);
+    color: #ffd8d8;
+}
+
+.settings-popover__placeholder {
+    padding: 12px;
+    border-radius: 8px;
+    background: rgba(255, 255, 255, 0.06);
+    font-size: 13px;
+    line-height: 1.45;
+    color: rgba(247, 250, 248, 0.72);
+}
+
+.settings-popover__handle .map-action-icon,
+.settings-popover__delete-button .map-action-icon {
+    width: 18px;
+    height: 18px;
+}
+
+body.is-sorting-layers {
+    user-select: none;
+    -webkit-user-select: none;
+}
+
 .map-overlay-cluster.is-collapsed .map-secondary-controls {
     grid-template-rows: 0fr;
     margin-top: 0;
@@ -110,16 +489,14 @@ body {
 .map-action-button {
     display: grid;
     place-items: center;
-    width: 36px;
-    height: 36px;
+    width: 44px;
+    height: 44px;
     padding: 0;
     border: 0;
     border-radius: 999px;
     background: var(--control-bg-color);
     color: var(--control-text-color);
     cursor: pointer;
-    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.18);
-    backdrop-filter: blur(10px);
     transition: transform 140ms ease, opacity 140ms ease, background 140ms ease;
 }
 
@@ -167,6 +544,10 @@ body {
     width: 22px;
     height: 22px;
 }
+
+/* ============== */
+/* MAP DECORATORS */
+/* ============== */
 
 .user-location-marker {
     width: 18px;
