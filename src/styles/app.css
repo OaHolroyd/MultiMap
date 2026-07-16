@@ -455,6 +455,8 @@ body {
     flex: 0 0 56px;
     width: 56px;
     height: 56px;
+    box-sizing: border-box;
+    border: 2px solid transparent;
     border-radius: var(--preview-radius);
     object-fit: cover;
     background: var(--surface-preview-bg-color);
@@ -567,8 +569,7 @@ body {
 }
 
 .settings-popover__item.is-enabled {
-    background: var(--surface-bg-color-enabled);
-    box-shadow: inset 0 0 0 1px var(--surface-outline-color-enabled), 0 0 0 1px var(--surface-outline-color-enabled-soft);
+    background: var(--surface-bg-color);
 }
 
 .settings-popover__item.is-disabled {
@@ -577,10 +578,6 @@ body {
 
 .settings-popover__item:hover {
     background: var(--surface-bg-color-hover);
-}
-
-.settings-popover__item.is-enabled:hover {
-    background: var(--surface-bg-color-enabled-hover);
 }
 
 .settings-popover__item.is-dragging {
@@ -657,6 +654,11 @@ body {
 
 .settings-popover__item.is-disabled .layers-popover__preview {
     opacity: 0.6;
+}
+
+.settings-popover__item.is-enabled .layers-popover__preview {
+    border-color: var(--surface-outline-color-enabled);
+    box-shadow: 0 0 0 2px var(--surface-outline-color-enabled-soft);
 }
 
 .settings-popover__option:hover {
