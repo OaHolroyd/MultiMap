@@ -63,6 +63,7 @@
   --map-control-edge-offset: 12px;
   --control-gap: 6px;
   --control-padding: 8px;
+  --surface-padding: 10px;
   --control-radius: 8px;
   --popover-radius: 10px;
   --preview-radius: 6px;
@@ -96,16 +97,6 @@
     in srgb,
     var(--color-surface-panel-alt) 56%,
     var(--color-accent-hover) 44%
-  );
-  --surface-bg-color-enabled: color-mix(
-    in srgb,
-    var(--color-surface-panel-alt) 72%,
-    var(--color-accent) 28%
-  );
-  --surface-bg-color-enabled-hover: color-mix(
-    in srgb,
-    var(--color-surface-panel-alt) 60%,
-    var(--color-accent) 40%
   );
   --surface-outline-color-enabled: color-mix(
     in srgb,
@@ -315,7 +306,7 @@ body {
   max-height: calc(
     100dvh - var(--safe-area-top) - var(--safe-area-bottom) - 24px
   );
-  padding: 10px;
+  padding: var(--surface-padding);
   border: 1px solid var(--color-border-default);
   border-radius: var(--popover-radius);
   background: var(--popover-bg-color);
@@ -381,20 +372,12 @@ body {
   background: var(--surface-bg-color);
   color: var(--control-text-color-muted);
   cursor: pointer;
-  transition:
-    background var(--transition-fast),
-    color var(--transition-fast),
-    transform var(--transition-fast);
+  transition: background var(--transition-fast), color var(--transition-fast);
 }
 
 .map-surface__close-button:hover {
   background: var(--surface-bg-color-hover);
   color: var(--control-text-color);
-}
-
-.map-surface__close-button:focus-visible {
-  outline: 2px solid var(--control-focus-ring-color);
-  outline-offset: 2px;
 }
 
 .map-surface__close-button .map-action-icon {
@@ -444,21 +427,26 @@ body {
   margin-bottom: 8px;
 }
 
-.layers-popover__tab {
-  padding: 8px 10px;
+.layers-popover__tab,
+.settings-popover__tab {
   border: 0;
   border-radius: var(--control-radius);
   background: var(--surface-bg-color);
   color: var(--control-text-color-muted);
-  font-size: 12px;
-  font-weight: 600;
   cursor: pointer;
   transition:
     background var(--transition-fast),
     color var(--transition-fast);
 }
 
-.layers-popover__tab.is-active {
+.layers-popover__tab {
+  padding: 8px 10px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.layers-popover__tab.is-active,
+.settings-popover__tab.is-active {
   background: var(--surface-bg-color-strong);
   color: var(--control-text-color);
 }
@@ -566,19 +554,6 @@ body {
   width: 100%;
   min-height: 40px;
   padding: 0;
-  border: 0;
-  border-radius: var(--control-radius);
-  background: var(--surface-bg-color);
-  color: var(--control-text-color-muted);
-  cursor: pointer;
-  transition:
-    background var(--transition-fast),
-    color var(--transition-fast);
-}
-
-.settings-popover__tab.is-active {
-  background: var(--surface-bg-color-strong);
-  color: var(--control-text-color);
 }
 
 .settings-popover__section {
@@ -600,18 +575,11 @@ body {
   color: var(--control-text-color);
   text-align: left;
   cursor: pointer;
-  transition:
-    background var(--transition-fast),
-    box-shadow var(--transition-fast);
+  transition: background var(--transition-fast), box-shadow var(--transition-fast);
 }
 
 .settings-popover__toggle:hover {
   background: var(--surface-bg-color-hover);
-}
-
-.settings-popover__toggle:focus-visible {
-  outline: 2px solid var(--control-focus-ring-color);
-  outline-offset: 2px;
 }
 
 .settings-popover__toggle.is-active {
@@ -625,6 +593,7 @@ body {
   gap: 3px;
 }
 
+.layers-popover__option-label,
 .settings-popover__toggle-label {
   font-size: 13px;
   font-weight: 600;
@@ -708,9 +677,10 @@ body {
 
 .settings-popover__item {
   display: grid;
-  grid-template-columns: var(--settings-side-control-size) minmax(0, 1fr) var(
-      --settings-side-control-size
-    );
+  grid-template-columns:
+    var(--settings-side-control-size)
+    minmax(0, 1fr)
+    var(--settings-side-control-size);
   align-items: stretch;
   gap: 0;
   overflow: hidden;
@@ -729,10 +699,6 @@ body {
     box-shadow var(--transition-fast);
   will-change: transform;
   touch-action: pan-y;
-}
-
-.settings-popover__item.is-enabled {
-  background: var(--surface-bg-color);
 }
 
 .settings-popover__item.is-disabled {
@@ -805,7 +771,6 @@ body {
   align-items: center;
   gap: 10px;
   flex: 1;
-  width: auto;
   padding: var(--control-padding);
   border: 0;
   background: transparent;
@@ -829,10 +794,6 @@ body {
 .settings-popover__item.is-enabled .layers-popover__preview {
   border-color: var(--surface-outline-color-enabled);
   box-shadow: 0 0 0 2px var(--surface-outline-color-enabled-soft);
-}
-
-.settings-popover__option:hover {
-  background: transparent;
 }
 
 .settings-popover__option:disabled {
@@ -929,6 +890,8 @@ body.is-sorting-layers {
   background: var(--control-bg-color-hover);
 }
 
+.map-surface__close-button:focus-visible,
+.settings-popover__toggle:focus-visible,
 .map-action-button:focus-visible {
   outline: 2px solid var(--control-focus-ring-color);
   outline-offset: 2px;
