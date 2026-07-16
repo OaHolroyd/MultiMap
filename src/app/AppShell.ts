@@ -1152,7 +1152,8 @@ export class AppShell {
         // The source catalog is module state so the UI, settings, and map
         // controller all read the same merged view of built-in and custom layers.
         appendCustomRasterSources(importedSources);
-        saveSourceCatalog();
+        const nextSourceCatalogState = getSourceCatalogState();
+        saveSourceCatalog(nextSourceCatalogState);
 
         const nextSettings = {
             theme: this.settings.theme,

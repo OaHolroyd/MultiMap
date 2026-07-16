@@ -437,7 +437,7 @@ function normalizeRasterSource(rawSource: unknown): RasterSourceConfig {
         ? DEFAULT_TILE_SIZE
         : requirePositiveInteger(rawSource.tileSize, 'tileSize');
     const zlims = requirePair(rawSource.zlims, 'zlims');
-    const bounds = rawSource.bounds === undefined
+    const bounds = rawSource.bounds === undefined || rawSource.bounds === null
         ? null
         : requireBounds(rawSource.bounds, 'bounds');
     const attribution = rawSource.attribution === undefined
