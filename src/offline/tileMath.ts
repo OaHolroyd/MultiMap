@@ -9,8 +9,11 @@ export function enumerateViewportTiles(
     minZoom: number,
     maxZoom: number
 ): TileCoordinate[] {
-    const effectiveBounds = intersectBounds(bounds, source.bounds);
-    if (!effectiveBounds) {
+    const normalizedBounds = normalizeBounds(bounds);
+    const latitudeRange = intersectLatitudeRange(normalizedBounds, source.bounds);
+    const longitudeRanges = intersectLongitudeRanges(normalizedBounds, source.bounds);
+
+    if (!latitudeRange || longitudeRanges.length === 0) {
         return [];
     }
 
@@ -25,11 +28,11 @@ export function enumerateViewportTiles(
     const coordinates: TileCoordinate[] = [];
 
     for (let zoom = startZoom; zoom <= endZoom; zoom += 1) {
-        enumerateLongitudeRanges(effectiveBounds[0], effectiveBounds[2]).forEach(([west, east]) => {
+        longitudeRanges.forEach(([west, east]) => {
             const xMin = clampTileIndex(longitudeToTileX(west, zoom), zoom);
             const xMax = clampTileIndex(longitudeToTileX(east, zoom), zoom);
-            const yMin = clampTileIndex(latitudeToTileY(effectiveBounds[3], zoom), zoom);
-            const yMax = clampTileIndex(latitudeToTileY(effectiveBounds[1], zoom), zoom);
+            const yMin = clampTileIndex(latitudeToTileY(latitudeRange[1], zoom), zoom);
+            const yMax = clampTileIndex(latitudeToTileY(latitudeRange[0], zoom), zoom);
 
             for (let x = Math.min(xMin, xMax); x <= Math.max(xMin, xMax); x += 1) {
                 for (let y = Math.min(yMin, yMax); y <= Math.max(yMin, yMax); y += 1) {
@@ -40,27 +43,6 @@ export function enumerateViewportTiles(
     }
 
     return deduplicateTileCoordinates(coordinates);
-}
-
-function intersectBounds(
-    targetBounds: [number, number, number, number],
-    sourceBounds: [number, number, number, number] | null
-): [number, number, number, number] | null {
-    if (!sourceBounds) {
-        return normalizeBounds(targetBounds);
-    }
-
-    const normalizedTarget = normalizeBounds(targetBounds);
-    const west = Math.max(normalizedTarget[0], sourceBounds[0]);
-    const south = Math.max(normalizedTarget[1], sourceBounds[1]);
-    const east = Math.min(normalizedTarget[2], sourceBounds[2]);
-    const north = Math.min(normalizedTarget[3], sourceBounds[3]);
-
-    if (west >= east || south >= north) {
-        return null;
-    }
-
-    return [west, south, east, north];
 }
 
 function normalizeBounds(bounds: [number, number, number, number]): [number, number, number, number] {
@@ -81,6 +63,52 @@ function enumerateLongitudeRanges(west: number, east: number): Array<[number, nu
         [west, 180],
         [-180, east]
     ];
+}
+
+function intersectLatitudeRange(
+    targetBounds: [number, number, number, number],
+    sourceBounds: [number, number, number, number] | null
+): [number, number] | null {
+    if (!sourceBounds) {
+        return [targetBounds[1], targetBounds[3]];
+    }
+
+    const south = Math.max(targetBounds[1], sourceBounds[1]);
+    const north = Math.min(targetBounds[3], sourceBounds[3]);
+
+    if (south >= north) {
+        return null;
+    }
+
+    return [south, north];
+}
+
+function intersectLongitudeRanges(
+    targetBounds: [number, number, number, number],
+    sourceBounds: [number, number, number, number] | null
+): Array<[number, number]> {
+    const targetRanges = enumerateLongitudeRanges(targetBounds[0], targetBounds[2]);
+    const sourceRanges = sourceBounds
+        ? enumerateLongitudeRanges(
+            normalizeLongitude(sourceBounds[0]),
+            normalizeLongitude(sourceBounds[2])
+        )
+        : [[-180, 180] as [number, number]];
+
+    const intersections: Array<[number, number]> = [];
+
+    targetRanges.forEach(([targetWest, targetEast]) => {
+        sourceRanges.forEach(([sourceWest, sourceEast]) => {
+            const west = Math.max(targetWest, sourceWest);
+            const east = Math.min(targetEast, sourceEast);
+
+            if (west < east) {
+                intersections.push([west, east]);
+            }
+        });
+    });
+
+    return intersections;
 }
 
 function longitudeToTileX(longitude: number, zoom: number): number {
@@ -132,4 +160,3 @@ function deduplicateTileCoordinates(coordinates: readonly TileCoordinate[]): Til
 
     return [...uniqueCoordinates.values()];
 }
-

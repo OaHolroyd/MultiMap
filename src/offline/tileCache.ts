@@ -1,7 +1,10 @@
 import type { RasterSourceConfig } from '../map/sources';
 import {
     DEFAULT_DOWNLOAD_MAX_ZOOM,
+    ESTIMATED_TILE_SIZE_BYTES,
     MAX_DOWNLOAD_TILE_WARNING_COUNT,
+    MAX_OFFLINE_DOWNLOAD_TILE_COUNT,
+    MAX_TOTAL_OFFLINE_STORAGE_BYTES,
     OFFLINE_TILE_CACHE_ROOT,
     OFFLINE_TILE_CACHE_VERSION,
     type OfflineDownloadFootprint,
@@ -21,6 +24,7 @@ import { notifyOfflineTileCacheUpdated } from './serviceWorkerBridge';
 const MANIFEST_FILENAME = 'cache.json';
 const TILES_DIRECTORY = 'tiles';
 const OWNERSHIP_DIRECTORY = 'ownership';
+const INTERRUPTED_DOWNLOAD_FAILURE_REASON = 'Download interrupted before completion. Partial tiles were removed.';
 const DEFAULT_MANIFEST: OfflineTileCacheManifest = {
     version: OFFLINE_TILE_CACHE_VERSION,
     updatedAt: new Date(0).toISOString(),
@@ -54,6 +58,22 @@ interface ViewportDownloadOptions {
     readonly onProgress?: (update: ViewportDownloadProgressUpdate) => void;
 }
 
+export interface OfflineStorageSummary {
+    readonly logicalBytes: number;
+    readonly cacheBytes: number;
+    readonly browserUsageBytes: number | null;
+    readonly browserQuotaBytes: number | null;
+    readonly browserRemainingBytes: number | null;
+    readonly persistentStorageSupported: boolean;
+    readonly persistentStorageGranted: boolean | null;
+    readonly totalJobs: number;
+    readonly completeJobs: number;
+    readonly failedJobs: number;
+    readonly activeJobs: number;
+}
+
+let offlineMutationQueue: Promise<void> = Promise.resolve();
+
 export async function syncOfflineSourceCatalog(sources: readonly RasterSourceConfig[]): Promise<void> {
     const manifest = await readManifest();
     await writeManifest({
@@ -64,10 +84,35 @@ export async function syncOfflineSourceCatalog(sources: readonly RasterSourceCon
 }
 
 export async function listOfflineDownloads(): Promise<OfflineDownloadJob[]> {
-    const manifest = await readManifest();
+    const manifest = await reconcileInterruptedDownloads();
     return [...manifest.jobs].sort((left, right) =>
         right.createdAt.localeCompare(left.createdAt)
     );
+}
+
+export async function getOfflineStorageSummary(): Promise<OfflineStorageSummary> {
+    const manifest = await reconcileInterruptedDownloads();
+    const estimate = await getBrowserStorageEstimate();
+    const cacheBytes = await getTileCacheSizeBytes();
+    const completeJobs = manifest.jobs.filter((job) => job.status === 'complete');
+    const failedJobs = manifest.jobs.filter((job) => job.status === 'failed');
+    const activeJobs = manifest.jobs.filter((job) => job.status === 'downloading');
+
+    return {
+        logicalBytes: completeJobs.reduce((total, job) => total + job.sizeBytes, 0),
+        cacheBytes,
+        browserUsageBytes: estimate.usage,
+        browserQuotaBytes: estimate.quota,
+        browserRemainingBytes: estimate.usage !== null && estimate.quota !== null
+            ? Math.max(0, estimate.quota - estimate.usage)
+            : null,
+        persistentStorageSupported: estimate.persistentStorageSupported,
+        persistentStorageGranted: estimate.persistentStorageGranted,
+        totalJobs: manifest.jobs.length,
+        completeJobs: completeJobs.length,
+        failedJobs: failedJobs.length,
+        activeJobs: activeJobs.length
+    };
 }
 
 export function createViewportDownloadPlan(
@@ -112,12 +157,6 @@ export async function downloadViewportTiles(
 ): Promise<OfflineDownloadJob> {
     await ensurePersistentStorage();
 
-    const initialManifest = await readManifest();
-    const manifest = {
-        ...initialManifest,
-        sources: mergeSourceSnapshots(initialManifest.sources, request.sources)
-    };
-
     const plan = createViewportDownloadPlan(
         request.bounds,
         request.minZoom,
@@ -126,7 +165,7 @@ export async function downloadViewportTiles(
     );
 
     const jobId = createJobId();
-    const inProgressJob: OfflineDownloadJob = {
+    let currentJob: OfflineDownloadJob = {
         id: jobId,
         name: request.name,
         createdAt: new Date().toISOString(),
@@ -136,19 +175,17 @@ export async function downloadViewportTiles(
         minZoom: plan.minZoom,
         maxZoom: plan.maxZoom,
         tileCount: plan.tasks.length,
+        completedTiles: 0,
         sizeBytes: 0,
-        status: 'downloading'
+        status: 'downloading',
+        failureReason: null
     };
 
-    const manifestWithJob = {
-        ...manifest,
-        jobs: [...manifest.jobs, inProgressJob]
-    };
-    await writeManifest(manifestWithJob);
+    await upsertOfflineJob(currentJob, request.sources);
     await notifyOfflineTileCacheUpdated();
-    options.onJobCreated?.(cloneJob(inProgressJob));
+    options.onJobCreated?.(cloneJob(currentJob));
     options.onProgress?.({
-        job: cloneJob(inProgressJob),
+        job: cloneJob(currentJob),
         completedTiles: 0,
         totalTiles: plan.tasks.length,
         sizeBytes: 0
@@ -160,52 +197,178 @@ export async function downloadViewportTiles(
 
     try {
         for (const task of plan.tasks) {
-            const sizeDelta = await persistTileTask(task, jobId, shardCache);
+            const sizeDelta = await runOfflineMutation(() =>
+                persistTileTask(task, jobId, shardCache)
+            );
             sizeBytes += sizeDelta;
             completedTiles += 1;
+            currentJob = {
+                ...currentJob,
+                completedTiles,
+                sizeBytes
+            };
+            await upsertOfflineJob(currentJob);
 
             options.onProgress?.({
-                job: cloneJob(inProgressJob),
+                job: cloneJob(currentJob),
                 completedTiles,
                 totalTiles: plan.tasks.length,
                 sizeBytes
             });
         }
 
-        const completedJob: OfflineDownloadJob = {
-            ...inProgressJob,
+        currentJob = {
+            ...currentJob,
             sizeBytes,
+            completedTiles,
             status: 'complete'
         };
-
-        await writeManifest({
-            ...manifestWithJob,
-            jobs: manifestWithJob.jobs.map((job) => job.id === jobId ? completedJob : job)
-        });
-        await flushOwnershipShards(shardCache);
+        await runOfflineMutation(() => flushOwnershipShards(shardCache));
+        await upsertOfflineJob(currentJob);
         await notifyOfflineTileCacheUpdated();
 
-        return completedJob;
+        return currentJob;
     } catch (error) {
-        await flushOwnershipShards(shardCache);
-        await deleteOfflineDownload(jobId);
+        await runOfflineMutation(() => flushOwnershipShards(shardCache));
+        await cleanupJobTiles(jobId, currentJob.sourceIds);
+
+        currentJob = {
+            ...currentJob,
+            completedTiles,
+            sizeBytes: 0,
+            status: 'failed',
+            failureReason: describeDownloadFailure(error)
+        };
+        await upsertOfflineJob(currentJob);
+        await notifyOfflineTileCacheUpdated();
         throw error;
     }
 }
 
 export async function deleteOfflineDownload(jobId: string): Promise<boolean> {
-    const manifest = await readManifest();
+    const manifest = await reconcileInterruptedDownloads();
     const existingJob = manifest.jobs.find((job) => job.id === jobId);
     if (!existingJob) {
         return false;
     }
+    await cleanupJobTiles(jobId, existingJob.sourceIds);
+    await removeOfflineJob(jobId);
+    await notifyOfflineTileCacheUpdated();
 
+    return true;
+}
+
+export async function deleteAllOfflineDownloads(): Promise<void> {
+    const manifest = await reconcileInterruptedDownloads();
+    for (const job of [...manifest.jobs]) {
+        await deleteOfflineDownload(job.id);
+    }
+}
+
+export function getDefaultDownloadMaxZoom(): number {
+    return DEFAULT_DOWNLOAD_MAX_ZOOM;
+}
+
+export function getDownloadTileWarningCount(): number {
+    return MAX_DOWNLOAD_TILE_WARNING_COUNT;
+}
+
+export function getMaximumOfflineDownloadTileCount(): number {
+    return MAX_OFFLINE_DOWNLOAD_TILE_COUNT;
+}
+
+export function getMaximumOfflineStorageBytes(): number {
+    return MAX_TOTAL_OFFLINE_STORAGE_BYTES;
+}
+
+export function estimateOfflineDownloadSizeBytes(tileCount: number): number {
+    return tileCount * ESTIMATED_TILE_SIZE_BYTES;
+}
+
+async function reconcileInterruptedDownloads(): Promise<MutableOfflineTileCacheManifest> {
+    return await runOfflineMutation(async () => {
+        const manifest = await readManifest();
+        const interruptedJobs = manifest.jobs.filter((job) => job.status === 'downloading');
+
+        if (interruptedJobs.length === 0) {
+            return manifest;
+        }
+
+        for (const job of interruptedJobs) {
+            await cleanupJobTilesUnlocked(job.id, job.sourceIds, false);
+        }
+
+        const reconciledManifest: MutableOfflineTileCacheManifest = {
+            ...manifest,
+            jobs: manifest.jobs.map((job) => {
+                if (job.status !== 'downloading') {
+                    return job;
+                }
+
+                return {
+                    ...job,
+                    completedTiles: 0,
+                    sizeBytes: 0,
+                    status: 'failed',
+                    failureReason: INTERRUPTED_DOWNLOAD_FAILURE_REASON
+                };
+            })
+        };
+
+        await writeManifest(reconciledManifest);
+        await notifyOfflineTileCacheUpdated();
+        return reconciledManifest;
+    });
+}
+
+async function upsertOfflineJob(
+    job: OfflineDownloadJob,
+    sourceCatalog: readonly RasterSourceConfig[] = []
+): Promise<void> {
+    await runOfflineMutation(async () => {
+        const manifest = await readManifest();
+        const nextManifest: MutableOfflineTileCacheManifest = {
+            ...manifest,
+            sources: sourceCatalog.length > 0
+                ? mergeSourceSnapshots(manifest.sources, sourceCatalog)
+                : manifest.sources,
+            jobs: upsertJobCollection(manifest.jobs, job)
+        };
+        await writeManifest(nextManifest);
+    });
+}
+
+async function removeOfflineJob(jobId: string): Promise<void> {
+    await runOfflineMutation(async () => {
+        const manifest = await readManifest();
+        await writeManifest({
+            ...manifest,
+            jobs: manifest.jobs.filter((job) => job.id !== jobId)
+        });
+    });
+}
+
+async function cleanupJobTiles(
+    jobId: string,
+    sourceIds: readonly string[],
+    removeEmptyRootDirectories: boolean = true
+): Promise<void> {
+    await runOfflineMutation(async () => {
+        await cleanupJobTilesUnlocked(jobId, sourceIds, removeEmptyRootDirectories);
+    });
+}
+
+async function cleanupJobTilesUnlocked(
+    jobId: string,
+    sourceIds: readonly string[],
+    removeEmptyRootDirectories: boolean
+): Promise<void> {
     const root = await getCacheRootDirectory();
     const ownershipRoot = await root.getDirectoryHandle(OWNERSHIP_DIRECTORY, { create: true });
     const tilesRoot = await root.getDirectoryHandle(TILES_DIRECTORY, { create: true });
     const shardCache = new Map<string, OwnershipShard>();
 
-    for (const sourceId of existingJob.sourceIds) {
+    for (const sourceId of sourceIds) {
         const sourceDirectory = await getOptionalDirectoryHandle(ownershipRoot, sourceId);
         if (!sourceDirectory) {
             continue;
@@ -261,30 +424,19 @@ export async function deleteOfflineDownload(jobId: string): Promise<boolean> {
         }
     }
 
-    await writeManifest({
-        ...manifest,
-        jobs: manifest.jobs.filter((job) => job.id !== jobId)
-    });
     await flushOwnershipShards(shardCache);
-    await removeEmptyDirectories(root);
-    await notifyOfflineTileCacheUpdated();
-
-    return true;
-}
-
-export async function deleteAllOfflineDownloads(): Promise<void> {
-    const manifest = await readManifest();
-    for (const job of [...manifest.jobs]) {
-        await deleteOfflineDownload(job.id);
+    if (removeEmptyRootDirectories) {
+        await removeEmptyDirectories(root);
     }
 }
 
-export function getDefaultDownloadMaxZoom(): number {
-    return DEFAULT_DOWNLOAD_MAX_ZOOM;
-}
-
-export function getDownloadTileWarningCount(): number {
-    return MAX_DOWNLOAD_TILE_WARNING_COUNT;
+function upsertJobCollection(
+    jobs: readonly OfflineDownloadJob[],
+    nextJob: OfflineDownloadJob
+): OfflineDownloadJob[] {
+    const nextJobs = jobs.filter((job) => job.id !== nextJob.id);
+    nextJobs.push(cloneJob(nextJob));
+    return nextJobs;
 }
 
 function deduplicateDownloadTasks(tasks: readonly TileDownloadTask[]): TileDownloadTask[] {
@@ -485,7 +637,19 @@ function cloneJob(job: OfflineDownloadJob): OfflineDownloadJob {
         ...job,
         sourceIds: [...job.sourceIds],
         bounds: [...job.bounds] as [number, number, number, number],
-        footprint: normalizeFootprint(job.footprint, job.bounds)
+        footprint: normalizeFootprint(job.footprint, job.bounds),
+        completedTiles: typeof job.completedTiles === 'number' && Number.isFinite(job.completedTiles)
+            ? Math.max(0, Math.min(job.tileCount, Math.floor(job.completedTiles)))
+            : job.status === 'complete'
+                ? job.tileCount
+                : 0,
+        sizeBytes: typeof job.sizeBytes === 'number' && Number.isFinite(job.sizeBytes)
+            ? Math.max(0, Math.floor(job.sizeBytes))
+            : 0,
+        status: job.status === 'complete' || job.status === 'failed' ? job.status : 'downloading',
+        failureReason: typeof job.failureReason === 'string' && job.failureReason.trim().length > 0
+            ? job.failureReason
+            : null
     };
 }
 
@@ -583,12 +747,90 @@ async function ensurePersistentStorage(): Promise<void> {
     }
 }
 
+async function runOfflineMutation<T>(operation: () => Promise<T>): Promise<T> {
+    const nextOperation = offlineMutationQueue.then(operation, operation);
+    offlineMutationQueue = nextOperation.then(() => undefined, () => undefined);
+    return await nextOperation;
+}
+
+async function getBrowserStorageEstimate(): Promise<{
+    usage: number | null;
+    quota: number | null;
+    persistentStorageSupported: boolean;
+    persistentStorageGranted: boolean | null;
+}> {
+    if (!('storage' in navigator)) {
+        return {
+            usage: null,
+            quota: null,
+            persistentStorageSupported: false,
+            persistentStorageGranted: null
+        };
+    }
+
+    const usageDetails = typeof navigator.storage.estimate === 'function'
+        ? await navigator.storage.estimate().catch(() => undefined)
+        : undefined;
+    const persistentStorageSupported = typeof navigator.storage.persisted === 'function';
+    const persistentStorageGranted = persistentStorageSupported
+        ? await navigator.storage.persisted().catch(() => null)
+        : null;
+
+    return {
+        usage: typeof usageDetails?.usage === 'number' ? usageDetails.usage : null,
+        quota: typeof usageDetails?.quota === 'number' ? usageDetails.quota : null,
+        persistentStorageSupported,
+        persistentStorageGranted
+    };
+}
+
+async function getTileCacheSizeBytes(): Promise<number> {
+    const root = await getCacheRootDirectory();
+    const tilesRoot = await getOptionalDirectoryHandle(root, TILES_DIRECTORY);
+    if (!tilesRoot) {
+        return 0;
+    }
+
+    return await getDirectorySizeBytes(tilesRoot);
+}
+
+async function getDirectorySizeBytes(directory: FileSystemDirectoryHandle): Promise<number> {
+    let totalBytes = 0;
+
+    for await (const [, handle] of directory.entries()) {
+        if (handle.kind === 'file') {
+            totalBytes += (await handle.getFile()).size;
+            continue;
+        }
+
+        totalBytes += await getDirectorySizeBytes(handle);
+    }
+
+    return totalBytes;
+}
+
 function createJobId(): string {
     if (typeof crypto.randomUUID === 'function') {
         return crypto.randomUUID();
     }
 
     return `download-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+
+function describeDownloadFailure(error: unknown): string {
+    if (error instanceof DOMException && error.name === 'QuotaExceededError') {
+        return 'Storage quota exceeded while saving tiles.';
+    }
+
+    if (error instanceof TypeError) {
+        return 'Network error while downloading tiles.';
+    }
+
+    if (error instanceof Error) {
+        return error.message;
+    }
+
+    return 'Unexpected error while downloading tiles.';
 }
 
 function inferTileExtension(requestUrl: string, contentType: string): string {

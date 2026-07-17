@@ -17,17 +17,22 @@ import { loadLayerSelection, saveLayerSelection } from '../map/storage';
 import type { LayerSelectionState } from '../map/layerSelection';
 import {
     createViewportDownloadPlan,
+    estimateOfflineDownloadSizeBytes,
     deleteAllOfflineDownloads,
     deleteOfflineDownload,
     downloadViewportTiles,
     getDefaultDownloadMaxZoom,
     getDownloadTileWarningCount,
+    getMaximumOfflineDownloadTileCount,
+    getMaximumOfflineStorageBytes,
+    getOfflineStorageSummary,
     listOfflineDownloads,
     syncOfflineSourceCatalog,
+    type OfflineStorageSummary,
     type ViewportDownloadProgressUpdate
 } from '../offline/tileCache';
 import { syncOfflineServiceWorkerConfig } from '../offline/serviceWorkerBridge';
-import type { OfflineDownloadJob } from '../offline/types';
+import type { OfflineDownloadFootprint, OfflineDownloadJob } from '../offline/types';
 import { loadSettings, saveSettings } from '../settings/storage';
 import {
     type AppTheme,
@@ -39,8 +44,10 @@ import closeIcon from '../assets/close.svg?raw';
 import deleteIcon from '../assets/delete.svg?raw';
 import dragHandleIcon from '../assets/drag-handle.svg?raw';
 import downloadIcon from '../assets/download.svg?raw';
+import airplaneModeIcon from '../assets/airplane-mode.svg?raw';
 import layersIcon from '../assets/layers.svg?raw';
 import locateIcon from '../assets/locate.svg?raw';
+import onlineStatusIcon from '../assets/online-status.svg?raw';
 import routesIcon from '../assets/routes.svg?raw';
 import searchIcon from '../assets/search.svg?raw';
 import settingsIcon from '../assets/settings.svg?raw';
@@ -89,6 +96,16 @@ interface OfflineDownloadProgressState {
     readonly totalTiles: number;
     readonly completedTiles: number;
     readonly sizeBytes: number;
+}
+
+type OfflineCoverageLevel = 'full' | 'partial' | 'none' | 'unknown';
+type OfflineStatusTone = 'success' | 'info' | 'warning';
+
+interface OfflineViewportCoverageState {
+    readonly level: OfflineCoverageLevel;
+    readonly message: string;
+    readonly detail: string;
+    readonly tone: OfflineStatusTone;
 }
 
 const TOP_LEFT_CONTROLS: readonly CollapsibleControlDefinition[] = [
@@ -167,6 +184,8 @@ export class AppShell {
     private offlineDownloadMutationInProgress: boolean;
     private readonly offlineDownloadProgressById: Map<string, OfflineDownloadProgressState>;
     private downloadDialogSubmitting: boolean;
+    private offlineStorageSummary: OfflineStorageSummary | null;
+    private offlineViewportCoverage: OfflineViewportCoverageState;
     private settingsDragState: SettingsDragState | null;
     private settingsSwipeState: SettingsSwipeState | null;
     private suppressSettingsClick: boolean;
@@ -186,8 +205,10 @@ export class AppShell {
         this.offlineDownloadMutationInProgress = false;
         this.offlineDownloadProgressById = new Map();
         this.downloadDialogSubmitting = false;
+        this.offlineStorageSummary = null;
         loadSourceCatalog();
         this.settings = loadSettings();
+        this.offlineViewportCoverage = this.buildUnknownOfflineCoverageState();
         this.layerSelection = loadLayerSelection(this.settings);
         this.activeRasterSourceId = this.layerSelection.activeBaseLayerId;
         this.activeOverlayIds = [...this.layerSelection.activeOverlayIds];
@@ -209,6 +230,9 @@ export class AppShell {
         this.container.innerHTML = `
             <div class="app-shell">
                 <div id="map-root" class="map-root" aria-label="Map view"></div>
+                <div id="map-offline-status-banner-slot">
+                    ${this.renderOfflineStatusBanner()}
+                </div>
 
                 ${CONTROL_CLUSTERS.map((cluster) => this.renderCollapsibleCluster(cluster)).join('')}
 
@@ -251,6 +275,31 @@ export class AppShell {
                     </button>
                     ${this.renderCollapsibleControls(BOTTOM_RIGHT_CONTROLS)}
                 </div>
+            </div>
+        `;
+    }
+
+    private renderOfflineStatusBanner(): string {
+        const hasFailedDownloads = this.hasFailedDownloads();
+        const shouldShow = this.settings.offlineMode || hasFailedDownloads;
+        if (!shouldShow) {
+            return '';
+        }
+
+        const detail = hasFailedDownloads && !this.settings.offlineMode
+            ? 'One or more offline downloads failed. Open Downloads in settings to review and remove them.'
+            : this.offlineViewportCoverage.detail;
+        const label = this.settings.offlineMode ? 'Offline mode' : 'Offline status';
+        const icon = this.settings.offlineMode ? airplaneModeIcon : onlineStatusIcon;
+
+        return `
+            <div
+                class="map-status-banner map-status-banner--${this.offlineViewportCoverage.tone}"
+                aria-live="polite"
+                aria-label="${this.escapeHtml(`${label}: ${detail}`)}"
+                title="${this.escapeHtml(detail)}"
+            >
+                ${icon}
             </div>
         `;
     }
@@ -349,11 +398,16 @@ export class AppShell {
             this.activeRasterSourceId = source.id;
             this.persistLayerSelection();
             this.syncLayersMenuSelection();
+            this.refreshOfflineViewportCoverage();
         });
         this.mapController.onActiveOverlaysChange((overlayIds) => {
             this.activeOverlayIds = [...overlayIds];
             this.persistLayerSelection();
             this.syncLayersMenuSelection();
+            this.refreshOfflineViewportCoverage();
+        });
+        this.mapController.onViewportChange(() => {
+            this.refreshOfflineViewportCoverage();
         });
     }
 
@@ -768,6 +822,9 @@ export class AppShell {
                     ${this.renderSettingsTabButton('downloads', downloadIcon, 'Download settings')}
                 </div>
                 ${this.renderSettingsPopoverPanel('general', `
+                    <div id="settings-offline-overview-general">
+                        ${this.renderOfflineOverviewCard()}
+                    </div>
                     <div class="settings-popover__section">
                         <button
                             id="settings-theme-toggle"
@@ -838,6 +895,9 @@ export class AppShell {
                     </div>
                 `)}
                 ${this.renderSettingsPopoverPanel('downloads', `
+                    <div id="settings-offline-overview-downloads">
+                        ${this.renderOfflineOverviewCard()}
+                    </div>
                     <div class="settings-popover__section">
                         <button
                             id="settings-tint-offline-tiles-toggle"
@@ -870,7 +930,7 @@ export class AppShell {
                         ${this.renderOfflineDownloadRows()}
                     </div>
                     <div class="settings-popover__placeholder">
-                        Use the map download button to save the current viewport for the active base layer and overlays.
+                        Use the map download button to save the current viewport for the active base layer and overlays. In offline mode, uncached tiles in uncovered areas are blocked.
                     </div>
                 `)}
             </div>
@@ -1120,6 +1180,9 @@ export class AppShell {
                 <div class="settings-popover__download-copy">
                     <div class="settings-popover__download-name">${download.name}</div>
                     ${this.renderOfflineDownloadRowDetail(download)}
+                    <div class="settings-popover__download-meta">
+                        ${this.escapeHtml(this.buildDownloadDescriptor(download))}
+                    </div>
                 </div>
                 <button
                     class="settings-popover__delete-button settings-popover__delete-button--danger"
@@ -1135,10 +1198,66 @@ export class AppShell {
         `).join('');
     }
 
+    private renderOfflineOverviewCard(): string {
+        const summary = this.offlineStorageSummary;
+        const storageUsage = summary
+            ? `${this.formatBytes(summary.cacheBytes)} cached`
+            : 'Calculating cache size…';
+        const browserQuota = summary
+            ? this.formatOptionalBytes(summary.browserUsageBytes, summary.browserQuotaBytes)
+            : 'Checking browser quota…';
+        const persistenceStatus = summary
+            ? summary.persistentStorageSupported
+                ? summary.persistentStorageGranted === true
+                    ? 'Persistent storage granted'
+                    : 'Persistent storage not granted'
+                : 'Persistent storage unsupported'
+            : 'Checking storage persistence…';
+        const jobsSummary = summary
+            ? `${summary.completeJobs} complete • ${summary.failedJobs} failed • ${summary.activeJobs} active`
+            : `${this.offlineDownloads.length} tracked downloads`;
+
+        return `
+            <div class="settings-popover__summary-card">
+                <div class="settings-popover__summary-row">
+                    <span class="settings-popover__summary-label">Viewport coverage</span>
+                    <span class="settings-popover__summary-value settings-popover__summary-value--${this.offlineViewportCoverage.tone}">
+                        ${this.escapeHtml(this.offlineViewportCoverage.message)}
+                    </span>
+                </div>
+                <div class="settings-popover__summary-meta">${this.escapeHtml(this.offlineViewportCoverage.detail)}</div>
+                <div class="settings-popover__summary-grid">
+                    <div class="settings-popover__summary-block">
+                        <span class="settings-popover__summary-label">Offline cache</span>
+                        <span class="settings-popover__summary-value">${storageUsage}</span>
+                    </div>
+                    <div class="settings-popover__summary-block">
+                        <span class="settings-popover__summary-label">Browser quota</span>
+                        <span class="settings-popover__summary-value">${browserQuota}</span>
+                    </div>
+                    <div class="settings-popover__summary-block">
+                        <span class="settings-popover__summary-label">Persistence</span>
+                        <span class="settings-popover__summary-value">${persistenceStatus}</span>
+                    </div>
+                    <div class="settings-popover__summary-block">
+                        <span class="settings-popover__summary-label">Downloads</span>
+                        <span class="settings-popover__summary-value">${jobsSummary}</span>
+                    </div>
+                </div>
+            </div>
+        `;
+    }
+
     private renderOfflineDownloadRowDetail(download: OfflineDownloadJob): string {
         const progress = this.getDownloadProgress(download.id);
         if (!progress) {
-            return `<div class="settings-popover__download-meta">${this.formatDownloadMeta(download)}</div>`;
+            const metaText = download.status === 'failed'
+                ? download.failureReason ?? 'Download failed.'
+                : this.formatDownloadMeta(download);
+            const metaClassName = download.status === 'failed'
+                ? 'settings-popover__download-meta settings-popover__download-meta--warning'
+                : 'settings-popover__download-meta';
+            return `<div class="${metaClassName}">${this.escapeHtml(metaText)}</div>`;
         }
 
         const progressPercent = progress.totalTiles > 0
@@ -1364,6 +1483,9 @@ export class AppShell {
     private refreshDownloadsPanel(): void {
         const downloadList = this.container.querySelector<HTMLElement>('#settings-download-list');
         const deleteAllButton = this.container.querySelector<HTMLButtonElement>('#settings-delete-all-downloads-button');
+        const generalOverview = this.container.querySelector<HTMLElement>('#settings-offline-overview-general');
+        const downloadsOverview = this.container.querySelector<HTMLElement>('#settings-offline-overview-downloads');
+        const bannerSlot = this.container.querySelector<HTMLElement>('#map-offline-status-banner-slot');
 
         if (downloadList) {
             downloadList.innerHTML = this.renderOfflineDownloadRows();
@@ -1371,6 +1493,18 @@ export class AppShell {
 
         if (deleteAllButton) {
             deleteAllButton.disabled = this.offlineDownloads.length === 0 || this.hasBlockedOfflineDownloadMutations();
+        }
+
+        if (generalOverview) {
+            generalOverview.innerHTML = this.renderOfflineOverviewCard();
+        }
+
+        if (downloadsOverview) {
+            downloadsOverview.innerHTML = this.renderOfflineOverviewCard();
+        }
+
+        if (bannerSlot) {
+            bannerSlot.innerHTML = this.renderOfflineStatusBanner();
         }
     }
 
@@ -1432,6 +1566,8 @@ export class AppShell {
                 this.settings.tintOfflineTiles
             );
             await this.refreshOfflineDownloads();
+            await this.refreshOfflineStorageSummary();
+            this.refreshOfflineViewportCoverage();
             await this.syncOfflineDownloadOverlay();
         } catch (error) {
             console.error('Unable to initialize offline tile cache metadata.', error);
@@ -1441,10 +1577,21 @@ export class AppShell {
     private async refreshOfflineDownloads(): Promise<void> {
         try {
             this.offlineDownloads = await listOfflineDownloads();
+            await this.refreshOfflineStorageSummary();
+            this.refreshOfflineViewportCoverage();
             this.refreshDownloadsPanel();
             await this.syncOfflineDownloadOverlay();
         } catch (error) {
             console.error('Unable to load offline downloads.', error);
+        }
+    }
+
+    private async refreshOfflineStorageSummary(): Promise<void> {
+        try {
+            this.offlineStorageSummary = await getOfflineStorageSummary();
+        } catch (error) {
+            console.error('Unable to compute offline storage summary.', error);
+            this.offlineStorageSummary = null;
         }
     }
 
@@ -1565,6 +1712,30 @@ export class AppShell {
             return;
         }
 
+        if (plan.tasks.length > getMaximumOfflineDownloadTileCount()) {
+            this.setDownloadDialogMessage(
+                `This download is too large. Reduce the area or zoom range below ${getMaximumOfflineDownloadTileCount().toLocaleString()} tiles.`
+            );
+            return;
+        }
+
+        const estimatedDownloadBytes = estimateOfflineDownloadSizeBytes(plan.tasks.length);
+        const currentCacheBytes = this.offlineStorageSummary?.cacheBytes ?? 0;
+        if (currentCacheBytes + estimatedDownloadBytes > getMaximumOfflineStorageBytes()) {
+            this.setDownloadDialogMessage(
+                `This download would exceed the current offline storage cap of ${this.formatBytes(getMaximumOfflineStorageBytes())}.`
+            );
+            return;
+        }
+
+        const browserRemainingBytes = this.offlineStorageSummary?.browserRemainingBytes ?? null;
+        if (browserRemainingBytes !== null && estimatedDownloadBytes > browserRemainingBytes) {
+            this.setDownloadDialogMessage(
+                `This download is estimated at ${this.formatBytes(estimatedDownloadBytes)}, which is larger than the browser's reported free space.`
+            );
+            return;
+        }
+
         if (
             plan.tasks.length >= getDownloadTileWarningCount() &&
             !window.confirm(`This download will fetch ${plan.tasks.length} tiles. Continue?`)
@@ -1606,6 +1777,9 @@ export class AppShell {
                         ...this.offlineDownloads.filter((entry) => entry.id !== job.id)
                     ];
                     this.refreshDownloadsPanel();
+                    void this.refreshOfflineStorageSummary().then(() => {
+                        this.refreshDownloadsPanel();
+                    });
                     void this.syncOfflineDownloadOverlay();
                 },
                 onProgress: (update) => {
@@ -1619,9 +1793,10 @@ export class AppShell {
             const message = error instanceof Error ? error.message : 'Unable to download the current viewport.';
             if (createdJobId) {
                 this.clearOfflineDownloadProgress(createdJobId);
+            } else {
+                window.alert(message);
             }
             await this.refreshOfflineDownloads();
-            window.alert(message);
         } finally {
             this.refreshDownloadsPanel();
         }
@@ -1640,6 +1815,8 @@ export class AppShell {
             nextSettings.offlineMode,
             nextSettings.tintOfflineTiles
         );
+        this.refreshOfflineViewportCoverage();
+        this.refreshDownloadsPanel();
     }
 
     private async toggleTintOfflineTilesPreference(): Promise<void> {
@@ -1656,6 +1833,8 @@ export class AppShell {
             nextSettings.tintOfflineTiles
         );
         await this.syncOfflineDownloadOverlay();
+        this.refreshOfflineViewportCoverage();
+        this.refreshDownloadsPanel();
     }
 
     private async handleDeleteOfflineDownload(downloadId: string): Promise<void> {
@@ -1761,6 +1940,105 @@ export class AppShell {
         return `${this.formatBytes(download.sizeBytes)} • ${download.tileCount} tiles`;
     }
 
+    private buildDownloadDescriptor(download: OfflineDownloadJob): string {
+        const sourceLabels = download.sourceIds
+            .map((sourceId) => findRasterSourceById(sourceId)?.layerId ?? sourceId)
+            .join(', ');
+        const boundsDescriptor = this.describeFootprint(download.footprint, download.bounds);
+
+        return `${sourceLabels} • z${download.minZoom}-${download.maxZoom} • ${boundsDescriptor}`;
+    }
+
+    private describeFootprint(
+        footprint: OfflineDownloadFootprint,
+        bounds: [number, number, number, number]
+    ): string {
+        if (footprint.kind === 'viewport-rectangle') {
+            const width = this.calculateLongitudeSpan(bounds[0], bounds[2]);
+            const height = Math.abs(bounds[3] - bounds[1]);
+            return `Rect ${width.toFixed(1)}° × ${height.toFixed(1)}°`;
+        }
+
+        return 'Polygon area';
+    }
+
+    private refreshOfflineViewportCoverage(): void {
+        const viewportBounds = this.mapController?.getViewportBounds() ?? null;
+        const activeSources = this.getVisibleRasterSources();
+
+        if (!viewportBounds || activeSources.length === 0) {
+            this.offlineViewportCoverage = this.buildUnknownOfflineCoverageState();
+            this.refreshDownloadsPanel();
+            return;
+        }
+
+        const completeDownloads = this.offlineDownloads.filter((download) => download.status === 'complete');
+        const fullyCoveredLabels: string[] = [];
+        const partiallyCoveredLabels: string[] = [];
+        const missingLabels: string[] = [];
+
+        activeSources.forEach((source) => {
+            const matchingDownloads = completeDownloads.filter((download) => download.sourceIds.includes(source.id));
+            const fullyCovered = matchingDownloads.some((download) =>
+                this.boundsFullyCoveredByDownload(viewportBounds, download)
+            );
+            if (fullyCovered) {
+                fullyCoveredLabels.push(source.layerId);
+                return;
+            }
+
+            const partiallyCovered = matchingDownloads.some((download) =>
+                this.boundsIntersectDownload(viewportBounds, download)
+            );
+            if (partiallyCovered) {
+                partiallyCoveredLabels.push(source.layerId);
+                return;
+            }
+
+            missingLabels.push(source.layerId);
+        });
+
+        const visibleSourceCount = activeSources.length;
+        if (fullyCoveredLabels.length === visibleSourceCount) {
+            this.offlineViewportCoverage = {
+                level: 'full',
+                message: 'Full',
+                detail: this.settings.offlineMode
+                    ? 'Current viewport is fully downloaded for all visible layers.'
+                    : 'Current viewport is fully downloaded for all visible layers if you go offline.',
+                tone: 'success'
+            };
+        } else if (fullyCoveredLabels.length > 0 || partiallyCoveredLabels.length > 0) {
+            const detailParts = [
+                partiallyCoveredLabels.length > 0
+                    ? `Partial: ${partiallyCoveredLabels.join(', ')}`
+                    : '',
+                missingLabels.length > 0
+                    ? `Missing: ${missingLabels.join(', ')}`
+                    : ''
+            ].filter((part) => part.length > 0);
+            this.offlineViewportCoverage = {
+                level: 'partial',
+                message: 'Partial',
+                detail: this.settings.offlineMode
+                    ? `${detailParts.join(' • ')}. Uncached tiles will be blocked.`
+                    : detailParts.join(' • '),
+                tone: 'warning'
+            };
+        } else {
+            this.offlineViewportCoverage = {
+                level: 'none',
+                message: 'None',
+                detail: this.settings.offlineMode
+                    ? `Missing: ${missingLabels.join(', ')}. External tiles are blocked in offline mode.`
+                    : `Missing: ${missingLabels.join(', ')}.`,
+                tone: this.settings.offlineMode ? 'warning' : 'info'
+            };
+        }
+
+        this.refreshDownloadsPanel();
+    }
+
     private getDownloadProgress(downloadId: string): OfflineDownloadProgressState | null {
         return this.offlineDownloadProgressById.get(downloadId) ?? null;
     }
@@ -1789,6 +2067,133 @@ export class AppShell {
 
     private hasBlockedOfflineDownloadMutations(): boolean {
         return this.offlineDownloadMutationInProgress || this.offlineDownloadProgressById.size > 0;
+    }
+
+    private hasFailedDownloads(): boolean {
+        return this.offlineDownloads.some((download) => download.status === 'failed');
+    }
+
+    private buildUnknownOfflineCoverageState(): OfflineViewportCoverageState {
+        return {
+            level: 'unknown',
+            message: 'Unknown',
+            detail: this.settings.offlineMode
+                ? 'Offline mode is enabled. Move the map to evaluate viewport coverage.'
+                : 'Move the map to inspect offline coverage for the current viewport.',
+            tone: this.settings.offlineMode ? 'warning' : 'info'
+        };
+    }
+
+    private boundsFullyCoveredByDownload(
+        viewportBounds: [number, number, number, number],
+        download: OfflineDownloadJob
+    ): boolean {
+        const footprintBounds = this.getFootprintBounds(download.footprint);
+        return this.boundsContains(footprintBounds, viewportBounds);
+    }
+
+    private boundsIntersectDownload(
+        viewportBounds: [number, number, number, number],
+        download: OfflineDownloadJob
+    ): boolean {
+        const footprintBounds = this.getFootprintBounds(download.footprint);
+        return this.boundsIntersect(footprintBounds, viewportBounds);
+    }
+
+    private getFootprintBounds(footprint: OfflineDownloadFootprint): [number, number, number, number] {
+        const positions = footprint.geometry.type === 'Polygon'
+            ? footprint.geometry.coordinates.flat()
+            : footprint.geometry.coordinates.flat(2);
+        let west = Number.POSITIVE_INFINITY;
+        let south = Number.POSITIVE_INFINITY;
+        let east = Number.NEGATIVE_INFINITY;
+        let north = Number.NEGATIVE_INFINITY;
+
+        positions.forEach(([longitude, latitude]) => {
+            west = Math.min(west, longitude);
+            south = Math.min(south, latitude);
+            east = Math.max(east, longitude);
+            north = Math.max(north, latitude);
+        });
+
+        return [west, south, east, north];
+    }
+
+    private boundsContains(
+        outerBounds: [number, number, number, number],
+        innerBounds: [number, number, number, number]
+    ): boolean {
+        return this.normalizeWrappedBounds(innerBounds).every((innerSegment) =>
+            this.normalizeWrappedBounds(outerBounds).some((outerSegment) =>
+                outerSegment[0] <= innerSegment[0]
+                && outerSegment[2] >= innerSegment[2]
+                && outerSegment[1] <= innerSegment[1]
+                && outerSegment[3] >= innerSegment[3]
+            )
+        );
+    }
+
+    private boundsIntersect(
+        leftBounds: [number, number, number, number],
+        rightBounds: [number, number, number, number]
+    ): boolean {
+        return this.normalizeWrappedBounds(leftBounds).some((leftSegment) =>
+            this.normalizeWrappedBounds(rightBounds).some((rightSegment) =>
+                leftSegment[0] < rightSegment[2]
+                && leftSegment[2] > rightSegment[0]
+                && leftSegment[1] < rightSegment[3]
+                && leftSegment[3] > rightSegment[1]
+            )
+        );
+    }
+
+    private normalizeWrappedBounds(
+        bounds: [number, number, number, number]
+    ): Array<[number, number, number, number]> {
+        const longitudeSegments = this.normalizeWrappedLongitudeRange(bounds[0], bounds[2]);
+        return longitudeSegments.map(([west, east]) => [west, bounds[1], east, bounds[3]]);
+    }
+
+    private normalizeWrappedLongitudeRange(west: number, east: number): Array<[number, number]> {
+        const normalizedWest = this.normalizeLongitude(west);
+        const normalizedEast = this.normalizeLongitude(east);
+
+        if (normalizedEast >= normalizedWest) {
+            return [[normalizedWest, normalizedEast]];
+        }
+
+        return [
+            [normalizedWest, 180],
+            [-180, normalizedEast]
+        ];
+    }
+
+    private normalizeLongitude(longitude: number): number {
+        let normalizedLongitude = longitude;
+
+        while (normalizedLongitude > 180) {
+            normalizedLongitude -= 360;
+        }
+
+        while (normalizedLongitude < -180) {
+            normalizedLongitude += 360;
+        }
+
+        return normalizedLongitude;
+    }
+
+    private calculateLongitudeSpan(west: number, east: number): number {
+        const segments = this.normalizeWrappedLongitudeRange(west, east);
+        return segments.reduce((total, [segmentWest, segmentEast]) =>
+            total + (segmentEast - segmentWest), 0);
+    }
+
+    private formatOptionalBytes(usedBytes: number | null, totalBytes: number | null): string {
+        if (usedBytes === null || totalBytes === null) {
+            return 'Unavailable';
+        }
+
+        return `${this.formatBytes(usedBytes)} / ${this.formatBytes(totalBytes)}`;
     }
 
     private formatBytes(sizeBytes: number): string {

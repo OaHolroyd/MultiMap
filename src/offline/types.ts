@@ -4,8 +4,11 @@ export const OFFLINE_TILE_CACHE_ROOT = 'tile-cache';
 export const OFFLINE_TILE_CACHE_VERSION = 1;
 export const DEFAULT_DOWNLOAD_MAX_ZOOM = 16;
 export const MAX_DOWNLOAD_TILE_WARNING_COUNT = 5000;
+export const MAX_OFFLINE_DOWNLOAD_TILE_COUNT = 15000;
+export const MAX_TOTAL_OFFLINE_STORAGE_BYTES = 768 * 1024 * 1024;
+export const ESTIMATED_TILE_SIZE_BYTES = 40 * 1024;
 
-export type OfflineDownloadStatus = 'downloading' | 'complete';
+export type OfflineDownloadStatus = 'downloading' | 'complete' | 'failed';
 export type OfflineDownloadFootprintKind = 'viewport-rectangle' | 'polygon';
 
 export interface OfflinePolygonGeometry {
@@ -48,8 +51,10 @@ export interface OfflineDownloadJob {
     readonly minZoom: number;
     readonly maxZoom: number;
     readonly tileCount: number;
+    readonly completedTiles: number;
     readonly sizeBytes: number;
     readonly status: OfflineDownloadStatus;
+    readonly failureReason: string | null;
 }
 
 export interface OfflineTileOwnerEntry {

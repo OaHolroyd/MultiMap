@@ -41,6 +41,7 @@ export class MapController {
     private readonly bearingChangeListeners: Array<(bearing: number) => void>;
     private readonly activeSourceChangeListeners: Array<(source: RasterSourceConfig) => void>;
     private readonly activeOverlayChangeListeners: Array<(overlayIds: readonly string[]) => void>;
+    private readonly viewportChangeListeners: Array<(bounds: [number, number, number, number] | null) => void>;
     private activeRasterSource: RasterSourceConfig;
     private activeOverlayIds: string[];
     private offlineDownloadJobs: OfflineDownloadJob[];
@@ -58,6 +59,7 @@ export class MapController {
         this.bearingChangeListeners = [];
         this.activeSourceChangeListeners = [];
         this.activeOverlayChangeListeners = [];
+        this.viewportChangeListeners = [];
         this.activeRasterSource = this.resolveRasterSource(initialRasterSourceId);
         this.activeOverlayIds = this.resolveOverlayIds(initialOverlayIds);
         this.offlineDownloadJobs = [];
@@ -104,12 +106,17 @@ export class MapController {
             this.notifyBearingChange();
             this.notifyActiveSourceChange();
             this.notifyActiveOverlayChange();
+            this.notifyViewportChange();
         });
 
         // The shell needs to know when the map is rotated so it can surface a
         // temporary north-up control without owning any map internals itself.
         this.map.on('rotate', () => {
             this.notifyBearingChange();
+        });
+
+        this.map.on('moveend', () => {
+            this.notifyViewportChange();
         });
     }
 
@@ -137,6 +144,11 @@ export class MapController {
     public onActiveOverlaysChange(listener: (overlayIds: readonly string[]) => void): void {
         this.activeOverlayChangeListeners.push(listener);
         listener([...this.activeOverlayIds]);
+    }
+
+    public onViewportChange(listener: (bounds: [number, number, number, number] | null) => void): void {
+        this.viewportChangeListeners.push(listener);
+        listener(this.getViewportBounds());
     }
 
     public async setRasterSource(sourceId: string): Promise<void> {
@@ -450,6 +462,13 @@ export class MapController {
         const activeOverlayIds = [...this.activeOverlayIds];
         this.activeOverlayChangeListeners.forEach((listener) => {
             listener(activeOverlayIds);
+        });
+    }
+
+    private notifyViewportChange(): void {
+        const bounds = this.getViewportBounds();
+        this.viewportChangeListeners.forEach((listener) => {
+            listener(bounds);
         });
     }
 
