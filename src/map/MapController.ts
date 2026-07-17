@@ -208,6 +208,24 @@ export class MapController {
         });
     }
 
+    public getViewportBounds(): [number, number, number, number] | null {
+        if (!this.map) {
+            return null;
+        }
+
+        const bounds = this.map.getBounds();
+        return [
+            bounds.getWest(),
+            bounds.getSouth(),
+            bounds.getEast(),
+            bounds.getNorth()
+        ];
+    }
+
+    public getCurrentZoom(): number {
+        return this.map?.getZoom() ?? 0;
+    }
+
     private async getCurrentPosition(): Promise<GeolocationPosition> {
         return await new Promise<GeolocationPosition>((resolve, reject) => {
             navigator.geolocation.getCurrentPosition(resolve, reject, {

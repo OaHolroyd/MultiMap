@@ -2,6 +2,7 @@ import { MapController } from '../map/MapController';
 import {
     appendCustomRasterSources,
     deleteCustomRasterSource,
+    findRasterSourceById,
     getAllRasterSources,
     getBaseRasterSources,
     getOverlayRasterSources,
@@ -14,6 +15,18 @@ import {
 import { loadSourceCatalog, saveSourceCatalog } from '../map/sourceStorage';
 import { loadLayerSelection, saveLayerSelection } from '../map/storage';
 import type { LayerSelectionState } from '../map/layerSelection';
+import {
+    createViewportDownloadPlan,
+    deleteAllOfflineDownloads,
+    deleteOfflineDownload,
+    downloadViewportTiles,
+    getDefaultDownloadMaxZoom,
+    getDownloadTileWarningCount,
+    listOfflineDownloads,
+    syncOfflineSourceCatalog
+} from '../offline/tileCache';
+import { syncOfflineServiceWorkerConfig } from '../offline/serviceWorkerBridge';
+import type { OfflineDownloadJob } from '../offline/types';
 import { loadSettings, saveSettings } from '../settings/storage';
 import {
     type AppTheme,
@@ -141,6 +154,8 @@ export class AppShell {
     private settingsPopoverTab: SettingsPopoverTab;
     private settings: AppSettings;
     private layerSelection: LayerSelectionState;
+    private offlineDownloads: OfflineDownloadJob[];
+    private offlineDownloadInProgress: boolean;
     private settingsDragState: SettingsDragState | null;
     private settingsSwipeState: SettingsSwipeState | null;
     private suppressSettingsClick: boolean;
@@ -155,6 +170,8 @@ export class AppShell {
         this.settingsDragState = null;
         this.settingsSwipeState = null;
         this.suppressSettingsClick = false;
+        this.offlineDownloads = [];
+        this.offlineDownloadInProgress = false;
         loadSourceCatalog();
         this.settings = loadSettings();
         this.layerSelection = loadLayerSelection(this.settings);
@@ -170,7 +187,8 @@ export class AppShell {
         this.mountMap();
         this.bindEvents();
         this.syncLayersPopoverTab();
-        this.syncThemeSettingControls();
+        this.syncSettingsToggleControls();
+        void this.initializeOfflineState();
     }
 
     private render(): void {
@@ -257,6 +275,7 @@ export class AppShell {
         const resetBearingButton = this.container.querySelector<HTMLButtonElement>('#map-reset-bearing-button');
         const locateButton = this.container.querySelector<HTMLButtonElement>('#map-locate-button');
         const layersButton = this.container.querySelector<HTMLButtonElement>('#map-layers-button');
+        const downloadButton = this.container.querySelector<HTMLButtonElement>('#map-download-area-button');
         const settingsButton = this.container.querySelector<HTMLButtonElement>('#map-settings-button');
         const importLayersButton = this.container.querySelector<HTMLButtonElement>('#settings-import-layers-button');
         const importLayersInput = this.container.querySelector<HTMLInputElement>('#settings-import-layers-input');
@@ -300,6 +319,10 @@ export class AppShell {
             this.syncSettingsMenuVisibility();
             this.layersMenuOpen = !this.layersMenuOpen;
             this.syncLayersMenuVisibility();
+        });
+
+        downloadButton?.addEventListener('click', async () => {
+            await this.handleViewportDownloadRequest(downloadButton);
         });
 
         settingsButton?.addEventListener('click', (event) => {
@@ -436,7 +459,7 @@ export class AppShell {
             ...BOTTOM_RIGHT_CONTROLS.filter((control) =>
                 !['map-layers-button', 'map-settings-button'].includes(control.id)
             )
-        ];
+        ].filter((control) => control.id !== 'map-download-area-button');
 
         // Centralizing the placeholder bindings keeps the shell readable now,
         // and gives us one place to swap in real handlers as controls graduate
@@ -639,6 +662,22 @@ export class AppShell {
                                 <span class="settings-popover__toggle-thumb"></span>
                             </span>
                         </button>
+                        <button
+                            id="settings-offline-mode-toggle"
+                            class="settings-popover__toggle"
+                            type="button"
+                            role="switch"
+                            aria-checked="${this.settings.offlineMode ? 'true' : 'false'}"
+                            title="Toggle offline mode"
+                        >
+                            <span class="settings-popover__toggle-copy">
+                                <span class="settings-popover__toggle-label">Offline mode</span>
+                                <span class="settings-popover__toggle-meta">Only use locally downloaded tiles and block external fetches.</span>
+                            </span>
+                            <span class="settings-popover__toggle-track" aria-hidden="true">
+                                <span class="settings-popover__toggle-thumb"></span>
+                            </span>
+                        </button>
                     </div>
                 `)}
                 ${this.renderSettingsPopoverPanel('layers', `
@@ -676,8 +715,39 @@ export class AppShell {
                     </div>
                 `)}
                 ${this.renderSettingsPopoverPanel('downloads', `
+                    <div class="settings-popover__section">
+                        <button
+                            id="settings-tint-offline-tiles-toggle"
+                            class="settings-popover__toggle"
+                            type="button"
+                            role="switch"
+                            aria-checked="${this.settings.tintOfflineTiles ? 'true' : 'false'}"
+                            title="Toggle offline tile tint"
+                        >
+                            <span class="settings-popover__toggle-copy">
+                                <span class="settings-popover__toggle-label">Tint offline tiles</span>
+                                <span class="settings-popover__toggle-meta">Highlight downloaded tiles in green to verify offline coverage.</span>
+                            </span>
+                            <span class="settings-popover__toggle-track" aria-hidden="true">
+                                <span class="settings-popover__toggle-thumb"></span>
+                            </span>
+                        </button>
+                    </div>
+                    <div class="settings-popover__actions">
+                        <button
+                            id="settings-delete-all-downloads-button"
+                            class="settings-popover__action-button settings-popover__action-button--danger"
+                            type="button"
+                            ${this.offlineDownloads.length === 0 || this.offlineDownloadInProgress ? 'disabled' : ''}
+                        >
+                            Delete all
+                        </button>
+                    </div>
+                    <div id="settings-download-list" class="settings-popover__list">
+                        ${this.renderOfflineDownloadRows()}
+                    </div>
                     <div class="settings-popover__placeholder">
-                        Download settings will be added here.
+                        Use the map download button to save the current viewport for the active base layer and overlays.
                     </div>
                 `)}
             </div>
@@ -745,6 +815,7 @@ export class AppShell {
         popover.setAttribute('aria-hidden', this.settingsMenuOpen ? 'false' : 'true');
         this.syncSettingsPopoverTab();
         this.refreshSettingsLayersPanel();
+        this.refreshDownloadsPanel();
     }
 
     private syncSettingsPopoverTab(): void {
@@ -763,7 +834,7 @@ export class AppShell {
             panel.setAttribute('aria-hidden', isActive ? 'false' : 'true');
         });
 
-        this.syncThemeSettingControls();
+        this.syncSettingsToggleControls();
     }
 
     private renderSourceOptions(
@@ -912,6 +983,35 @@ export class AppShell {
         }).join('');
     }
 
+    private renderOfflineDownloadRows(): string {
+        if (this.offlineDownloads.length === 0) {
+            return `
+                <div class="settings-popover__placeholder">
+                    No offline areas have been downloaded yet.
+                </div>
+            `;
+        }
+
+        return this.offlineDownloads.map((download) => `
+            <div class="settings-popover__download-row">
+                <div class="settings-popover__download-copy">
+                    <div class="settings-popover__download-name">${download.name}</div>
+                    <div class="settings-popover__download-meta">${this.formatDownloadMeta(download)}</div>
+                </div>
+                <button
+                    class="settings-popover__delete-button settings-popover__delete-button--danger"
+                    type="button"
+                    data-delete-download-id="${download.id}"
+                    aria-label="Delete download ${download.name}"
+                    title="Delete download ${download.name}"
+                    ${this.offlineDownloadInProgress ? 'disabled' : ''}
+                >
+                    ${deleteIcon}
+                </button>
+            </div>
+        `).join('');
+    }
+
     private readonly handleLayersPopoverClick = async (event: MouseEvent): Promise<void> => {
         const target = event.target;
         if (!(target instanceof Element)) {
@@ -969,6 +1069,12 @@ export class AppShell {
 
         const deleteButton = target.closest<HTMLButtonElement>('.settings-popover__delete-button');
         if (deleteButton) {
+            const downloadId = deleteButton.dataset.deleteDownloadId;
+            if (downloadId) {
+                await this.handleDeleteOfflineDownload(downloadId);
+                return;
+            }
+
             const sourceId = deleteButton.dataset.deleteSourceId;
             if (sourceId) {
                 await this.animateAndDeleteLayer(sourceId, deleteButton);
@@ -976,9 +1082,27 @@ export class AppShell {
             return;
         }
 
+        const deleteAllDownloadsButton = target.closest<HTMLButtonElement>('#settings-delete-all-downloads-button');
+        if (deleteAllDownloadsButton) {
+            await this.handleDeleteAllOfflineDownloads();
+            return;
+        }
+
         const themeToggle = target.closest<HTMLButtonElement>('#settings-theme-toggle');
         if (themeToggle) {
             this.toggleThemePreference();
+            return;
+        }
+
+        const offlineModeToggle = target.closest<HTMLButtonElement>('#settings-offline-mode-toggle');
+        if (offlineModeToggle) {
+            await this.toggleOfflineModePreference();
+            return;
+        }
+
+        const tintOfflineTilesToggle = target.closest<HTMLButtonElement>('#settings-tint-offline-tiles-toggle');
+        if (tintOfflineTilesToggle) {
+            await this.toggleTintOfflineTilesPreference();
             return;
         }
 
@@ -1089,6 +1213,19 @@ export class AppShell {
         }
     }
 
+    private refreshDownloadsPanel(): void {
+        const downloadList = this.container.querySelector<HTMLElement>('#settings-download-list');
+        const deleteAllButton = this.container.querySelector<HTMLButtonElement>('#settings-delete-all-downloads-button');
+
+        if (downloadList) {
+            downloadList.innerHTML = this.renderOfflineDownloadRows();
+        }
+
+        if (deleteAllButton) {
+            deleteAllButton.disabled = this.offlineDownloads.length === 0 || this.offlineDownloadInProgress;
+        }
+    }
+
     private toggleThemePreference(): void {
         const nextTheme: AppTheme = this.settings.theme === 'light' ? 'dark' : 'light';
         const nextSettings: AppSettings = {
@@ -1099,7 +1236,7 @@ export class AppShell {
         this.settings = nextSettings;
         saveSettings(nextSettings);
         this.applyThemePreference(nextTheme);
-        this.syncThemeSettingControls();
+        this.syncSettingsToggleControls();
     }
 
     private applyThemePreference(theme: AppTheme): void {
@@ -1115,16 +1252,251 @@ export class AppShell {
         delete document.body.dataset.theme;
     }
 
-    private syncThemeSettingControls(): void {
+    private syncSettingsToggleControls(): void {
         const themeToggle = this.container.querySelector<HTMLButtonElement>('#settings-theme-toggle');
-        if (!themeToggle) {
+        if (themeToggle) {
+            const isLightTheme = this.settings.theme === 'light';
+            themeToggle.classList.toggle('is-active', isLightTheme);
+            themeToggle.setAttribute('aria-checked', isLightTheme ? 'true' : 'false');
+            themeToggle.setAttribute('title', isLightTheme ? 'Switch to dark mode' : 'Switch to light mode');
+        }
+
+        const offlineModeToggle = this.container.querySelector<HTMLButtonElement>('#settings-offline-mode-toggle');
+        if (offlineModeToggle) {
+            offlineModeToggle.classList.toggle('is-active', this.settings.offlineMode);
+            offlineModeToggle.setAttribute('aria-checked', this.settings.offlineMode ? 'true' : 'false');
+            offlineModeToggle.setAttribute('title', this.settings.offlineMode ? 'Disable offline mode' : 'Enable offline mode');
+        }
+
+        const tintOfflineTilesToggle = this.container.querySelector<HTMLButtonElement>('#settings-tint-offline-tiles-toggle');
+        if (tintOfflineTilesToggle) {
+            tintOfflineTilesToggle.classList.toggle('is-active', this.settings.tintOfflineTiles);
+            tintOfflineTilesToggle.setAttribute('aria-checked', this.settings.tintOfflineTiles ? 'true' : 'false');
+            tintOfflineTilesToggle.setAttribute('title', this.settings.tintOfflineTiles ? 'Disable offline tile tint' : 'Enable offline tile tint');
+        }
+    }
+
+    private async initializeOfflineState(): Promise<void> {
+        try {
+            await syncOfflineSourceCatalog(getAllRasterSources());
+            await syncOfflineServiceWorkerConfig(
+                this.settings.offlineMode,
+                this.settings.tintOfflineTiles
+            );
+            await this.refreshOfflineDownloads();
+        } catch (error) {
+            console.error('Unable to initialize offline tile cache metadata.', error);
+        }
+    }
+
+    private async refreshOfflineDownloads(): Promise<void> {
+        try {
+            this.offlineDownloads = await listOfflineDownloads();
+            this.refreshDownloadsPanel();
+        } catch (error) {
+            console.error('Unable to load offline downloads.', error);
+        }
+    }
+
+    private async handleViewportDownloadRequest(downloadButton: HTMLButtonElement): Promise<void> {
+        if (!this.mapController || this.offlineDownloadInProgress) {
             return;
         }
 
-        const isLightTheme = this.settings.theme === 'light';
-        themeToggle.classList.toggle('is-active', isLightTheme);
-        themeToggle.setAttribute('aria-checked', isLightTheme ? 'true' : 'false');
-        themeToggle.setAttribute('title', isLightTheme ? 'Switch to dark mode' : 'Switch to light mode');
+        const name = window.prompt('Name this offline area.', this.buildDefaultDownloadName());
+        if (name === null) {
+            return;
+        }
+
+        const trimmedName = name.trim();
+        if (!trimmedName) {
+            window.alert('Please provide a non-empty download name.');
+            return;
+        }
+
+        const maxZoomInput = window.prompt(
+            'Maximum zoom level to download.',
+            String(getDefaultDownloadMaxZoom())
+        );
+        if (maxZoomInput === null) {
+            return;
+        }
+
+        const parsedMaxZoom = Number.parseInt(maxZoomInput, 10);
+        if (Number.isNaN(parsedMaxZoom) || parsedMaxZoom < 0) {
+            window.alert('Please provide a valid non-negative integer zoom level.');
+            return;
+        }
+
+        const bounds = this.mapController.getViewportBounds();
+        if (!bounds) {
+            window.alert('The current map viewport is not available yet.');
+            return;
+        }
+
+        const visibleSources = this.getVisibleRasterSources();
+        if (visibleSources.length === 0) {
+            window.alert('No visible raster layers are available to download.');
+            return;
+        }
+
+        const currentZoomFloor = Math.floor(this.mapController.getCurrentZoom());
+        const plan = createViewportDownloadPlan(bounds, currentZoomFloor, parsedMaxZoom, visibleSources);
+        if (plan.tasks.length === 0) {
+            window.alert('No tiles were found for the current viewport and zoom range.');
+            return;
+        }
+
+        if (
+            plan.tasks.length >= getDownloadTileWarningCount() &&
+            !window.confirm(`This download will fetch ${plan.tasks.length} tiles. Continue?`)
+        ) {
+            return;
+        }
+
+        this.offlineDownloadInProgress = true;
+        downloadButton.disabled = true;
+        downloadButton.classList.add('is-loading');
+        this.refreshDownloadsPanel();
+
+        try {
+            await syncOfflineSourceCatalog(getAllRasterSources());
+            const createdJob = await downloadViewportTiles({
+                name: trimmedName,
+                bounds,
+                minZoom: currentZoomFloor,
+                maxZoom: parsedMaxZoom,
+                sources: visibleSources
+            });
+
+            await this.refreshOfflineDownloads();
+            window.alert(`Downloaded ${createdJob.tileCount} tiles (${this.formatBytes(createdJob.sizeBytes)}).`);
+        } catch (error) {
+            const message = error instanceof Error ? error.message : 'Unable to download the current viewport.';
+            window.alert(message);
+        } finally {
+            this.offlineDownloadInProgress = false;
+            downloadButton.disabled = false;
+            downloadButton.classList.remove('is-loading');
+            this.refreshDownloadsPanel();
+        }
+    }
+
+    private async toggleOfflineModePreference(): Promise<void> {
+        const nextSettings: AppSettings = {
+            ...this.settings,
+            offlineMode: !this.settings.offlineMode
+        };
+
+        this.settings = nextSettings;
+        saveSettings(nextSettings);
+        this.syncSettingsToggleControls();
+        await syncOfflineServiceWorkerConfig(
+            nextSettings.offlineMode,
+            nextSettings.tintOfflineTiles
+        );
+    }
+
+    private async toggleTintOfflineTilesPreference(): Promise<void> {
+        const nextSettings: AppSettings = {
+            ...this.settings,
+            tintOfflineTiles: !this.settings.tintOfflineTiles
+        };
+
+        this.settings = nextSettings;
+        saveSettings(nextSettings);
+        this.syncSettingsToggleControls();
+        await syncOfflineServiceWorkerConfig(
+            nextSettings.offlineMode,
+            nextSettings.tintOfflineTiles
+        );
+    }
+
+    private async handleDeleteOfflineDownload(downloadId: string): Promise<void> {
+        if (this.offlineDownloadInProgress) {
+            return;
+        }
+
+        const download = this.offlineDownloads.find((entry) => entry.id === downloadId);
+        if (!download || !window.confirm(`Delete offline area "${download.name}"?`)) {
+            return;
+        }
+
+        this.offlineDownloadInProgress = true;
+        this.refreshDownloadsPanel();
+
+        try {
+            await deleteOfflineDownload(downloadId);
+            await this.refreshOfflineDownloads();
+        } catch (error) {
+            const message = error instanceof Error ? error.message : 'Unable to delete the offline area.';
+            window.alert(message);
+        } finally {
+            this.offlineDownloadInProgress = false;
+            this.refreshDownloadsPanel();
+        }
+    }
+
+    private async handleDeleteAllOfflineDownloads(): Promise<void> {
+        if (this.offlineDownloadInProgress || this.offlineDownloads.length === 0) {
+            return;
+        }
+
+        if (!window.confirm('Delete all offline areas?')) {
+            return;
+        }
+
+        this.offlineDownloadInProgress = true;
+        this.refreshDownloadsPanel();
+
+        try {
+            await deleteAllOfflineDownloads();
+            await this.refreshOfflineDownloads();
+        } catch (error) {
+            const message = error instanceof Error ? error.message : 'Unable to delete offline areas.';
+            window.alert(message);
+        } finally {
+            this.offlineDownloadInProgress = false;
+            this.refreshDownloadsPanel();
+        }
+    }
+
+    private getVisibleRasterSources(): RasterSourceConfig[] {
+        const visibleSources: RasterSourceConfig[] = [];
+        const activeBaseSource = findRasterSourceById(this.activeRasterSourceId);
+        if (activeBaseSource) {
+            visibleSources.push(activeBaseSource);
+        }
+
+        this.activeOverlayIds.forEach((overlayId) => {
+            const overlaySource = findRasterSourceById(overlayId);
+            if (overlaySource) {
+                visibleSources.push(overlaySource);
+            }
+        });
+
+        return visibleSources;
+    }
+
+    private buildDefaultDownloadName(): string {
+        const now = new Date();
+        const dateLabel = now.toISOString().slice(0, 10);
+        return `Offline area ${dateLabel}`;
+    }
+
+    private formatDownloadMeta(download: OfflineDownloadJob): string {
+        return `${this.formatBytes(download.sizeBytes)} • ${download.tileCount} tiles`;
+    }
+
+    private formatBytes(sizeBytes: number): string {
+        if (sizeBytes < 1024) {
+            return `${sizeBytes} B`;
+        }
+        if (sizeBytes < 1024 * 1024) {
+            return `${(sizeBytes / 1024).toFixed(1)} KB`;
+        }
+
+        return `${(sizeBytes / (1024 * 1024)).toFixed(1)} MB`;
     }
 
     private getEnabledBaseSources(): RasterSourceConfig[] {
@@ -1157,6 +1529,8 @@ export class AppShell {
 
         const nextSettings = {
             theme: this.settings.theme,
+            offlineMode: this.settings.offlineMode,
+            tintOfflineTiles: this.settings.tintOfflineTiles,
             enabledBaseLayerIds: this.mergeEnabledLayerIds(
                 this.settings.enabledBaseLayerIds,
                 importedSources.filter((source) => source.type === 'base').map((source) => source.id)
@@ -1171,6 +1545,7 @@ export class AppShell {
         saveSettings(nextSettings);
         this.refreshLayerSelectionMenu();
         this.refreshSettingsLayersPanel();
+        await syncOfflineSourceCatalog(getAllRasterSources());
 
         window.alert(`Imported ${importedSources.length} layer${importedSources.length === 1 ? '' : 's'}.`);
     }
@@ -1424,6 +1799,7 @@ export class AppShell {
         saveSourceCatalog(getSourceCatalogState());
         this.refreshLayerSelectionMenu();
         this.refreshSettingsLayersPanel();
+        void syncOfflineSourceCatalog(getAllRasterSources());
     }
 
     private clearDraggedItemState(): void {
@@ -1490,6 +1866,7 @@ export class AppShell {
         }
 
         saveSourceCatalog(getSourceCatalogState());
+        await syncOfflineSourceCatalog(getAllRasterSources());
 
         const nextSettings = this.buildSettingsWithoutSource(sourceId, removedSource.type);
         this.settings = nextSettings;

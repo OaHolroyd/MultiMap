@@ -656,6 +656,20 @@ body {
   background: var(--surface-bg-color-strong-hover);
 }
 
+.settings-popover__action-button:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.settings-popover__action-button--danger {
+  background: var(--surface-bg-color-delete);
+  color: var(--surface-text-color-delete-hover);
+}
+
+.settings-popover__action-button--danger:hover {
+  background: var(--color-danger-soft-hover);
+}
+
 .settings-popover__file-input {
   display: none;
 }
@@ -673,6 +687,37 @@ body {
   flex-direction: column;
   gap: var(--control-gap);
   overscroll-behavior: contain;
+}
+
+.settings-popover__download-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) var(--settings-side-control-size);
+  align-items: stretch;
+  gap: 0;
+  overflow: hidden;
+  border-radius: var(--popover-radius);
+  background: var(--surface-bg-color);
+}
+
+.settings-popover__download-copy {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  justify-content: center;
+  gap: 4px;
+  padding: 12px;
+}
+
+.settings-popover__download-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--control-text-color);
+}
+
+.settings-popover__download-meta {
+  font-size: 11px;
+  line-height: 1.35;
+  color: var(--control-text-color-subtle);
 }
 
 .settings-popover__item {
@@ -805,8 +850,13 @@ body {
   color: var(--surface-text-color-delete);
 }
 
+.settings-popover__delete-button--danger {
+  color: var(--surface-text-color-delete);
+}
+
 .settings-popover__item.is-swiping .settings-popover__delete-button,
-.settings-popover__item.is-custom:hover .settings-popover__delete-button {
+.settings-popover__item.is-custom:hover .settings-popover__delete-button,
+.settings-popover__download-row:hover .settings-popover__delete-button--danger {
   background: var(--surface-bg-color-delete);
   color: var(--surface-text-color-delete-hover);
 }
