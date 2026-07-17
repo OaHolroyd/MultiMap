@@ -6,6 +6,24 @@ export const DEFAULT_DOWNLOAD_MAX_ZOOM = 16;
 export const MAX_DOWNLOAD_TILE_WARNING_COUNT = 5000;
 
 export type OfflineDownloadStatus = 'downloading' | 'complete';
+export type OfflineDownloadFootprintKind = 'viewport-rectangle' | 'polygon';
+
+export interface OfflinePolygonGeometry {
+    readonly type: 'Polygon';
+    readonly coordinates: number[][][];
+}
+
+export interface OfflineMultiPolygonGeometry {
+    readonly type: 'MultiPolygon';
+    readonly coordinates: number[][][][];
+}
+
+export type OfflineDownloadGeometry = OfflinePolygonGeometry | OfflineMultiPolygonGeometry;
+
+export interface OfflineDownloadFootprint {
+    readonly kind: OfflineDownloadFootprintKind;
+    readonly geometry: OfflineDownloadGeometry;
+}
 
 export interface OfflineSourceSnapshot {
     readonly id: string;
@@ -26,6 +44,7 @@ export interface OfflineDownloadJob {
     readonly createdAt: string;
     readonly sourceIds: string[];
     readonly bounds: [number, number, number, number];
+    readonly footprint: OfflineDownloadFootprint;
     readonly minZoom: number;
     readonly maxZoom: number;
     readonly tileCount: number;
@@ -67,4 +86,3 @@ export interface ViewportDownloadRequest {
     readonly maxZoom: number;
     readonly sources: readonly RasterSourceConfig[];
 }
-

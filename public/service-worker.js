@@ -48,7 +48,6 @@ self.addEventListener("activate", (event) => {
 });
 
 self.addEventListener("fetch", (event) => {
-  console.log(`EVENT: fetch`);
   const { request } = event;
 
   if (request.method !== "GET") {
@@ -64,19 +63,15 @@ self.addEventListener("fetch", (event) => {
 });
 
 async function handleRequest(request) {
-  console.log(`handleRequest(${request})`);
   const requestUrl = new URL(request.url);
-  console.log(`  URL: ${requestUrl}`);
   const offlineTileResponse = await createOfflineTileResponse(request, {
     tintOfflineTiles: tintOfflineTilesEnabled,
   });
   if (offlineTileResponse) {
-    console.log(`  OFFLINE`);
     return offlineTileResponse;
   }
 
   if (requestUrl.origin === self.location.origin) {
-    console.log(`  STATIC`);
     return handleStaticRequest(request);
   }
 
@@ -87,7 +82,6 @@ async function handleRequest(request) {
     });
   }
 
-  console.log(`  ONLINE`);
   return fetch(request);
 }
 

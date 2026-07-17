@@ -23,7 +23,8 @@ import {
     getDefaultDownloadMaxZoom,
     getDownloadTileWarningCount,
     listOfflineDownloads,
-    syncOfflineSourceCatalog
+    syncOfflineSourceCatalog,
+    type ViewportDownloadProgressUpdate
 } from '../offline/tileCache';
 import { syncOfflineServiceWorkerConfig } from '../offline/serviceWorkerBridge';
 import type { OfflineDownloadJob } from '../offline/types';
@@ -81,6 +82,13 @@ interface SettingsSwipeState {
     readonly startPointerY: number;
     engaged: boolean;
     offsetX: number;
+}
+
+interface OfflineDownloadProgressState {
+    readonly jobId: string;
+    readonly totalTiles: number;
+    readonly completedTiles: number;
+    readonly sizeBytes: number;
 }
 
 const TOP_LEFT_CONTROLS: readonly CollapsibleControlDefinition[] = [
@@ -146,6 +154,7 @@ export class AppShell {
     private mapController: MapController | null;
     private controlsExpanded: boolean;
     private northResetVisible: boolean;
+    private downloadDialogOpen: boolean;
     private layersMenuOpen: boolean;
     private settingsMenuOpen: boolean;
     private activeRasterSourceId: string;
@@ -155,7 +164,9 @@ export class AppShell {
     private settings: AppSettings;
     private layerSelection: LayerSelectionState;
     private offlineDownloads: OfflineDownloadJob[];
-    private offlineDownloadInProgress: boolean;
+    private offlineDownloadMutationInProgress: boolean;
+    private readonly offlineDownloadProgressById: Map<string, OfflineDownloadProgressState>;
+    private downloadDialogSubmitting: boolean;
     private settingsDragState: SettingsDragState | null;
     private settingsSwipeState: SettingsSwipeState | null;
     private suppressSettingsClick: boolean;
@@ -165,13 +176,16 @@ export class AppShell {
         this.mapController = null;
         this.controlsExpanded = true;
         this.northResetVisible = false;
+        this.downloadDialogOpen = false;
         this.layersMenuOpen = false;
         this.settingsMenuOpen = false;
         this.settingsDragState = null;
         this.settingsSwipeState = null;
         this.suppressSettingsClick = false;
         this.offlineDownloads = [];
-        this.offlineDownloadInProgress = false;
+        this.offlineDownloadMutationInProgress = false;
+        this.offlineDownloadProgressById = new Map();
+        this.downloadDialogSubmitting = false;
         loadSourceCatalog();
         this.settings = loadSettings();
         this.layerSelection = loadLayerSelection(this.settings);
@@ -198,6 +212,7 @@ export class AppShell {
 
                 ${CONTROL_CLUSTERS.map((cluster) => this.renderCollapsibleCluster(cluster)).join('')}
 
+                ${this.renderDownloadDialog()}
                 ${this.renderLayersPopover()}
                 ${this.renderSettingsPopover()}
 
@@ -240,6 +255,78 @@ export class AppShell {
         `;
     }
 
+    private renderDownloadDialog(): string {
+        return `
+            <div
+                id="download-dialog-backdrop"
+                class="map-surface-backdrop map-surface-backdrop--dialog ${this.downloadDialogOpen ? 'is-open' : ''}"
+                aria-hidden="${this.downloadDialogOpen ? 'false' : 'true'}"
+            ></div>
+            <div
+                id="download-dialog"
+                class="map-surface download-dialog ${this.downloadDialogOpen ? 'is-open' : ''}"
+                role="dialog"
+                aria-modal="true"
+                aria-labelledby="download-dialog-title"
+                aria-hidden="${this.downloadDialogOpen ? 'false' : 'true'}"
+            >
+                <div class="map-surface__header">
+                    <div class="map-surface__header-row">
+                        <div id="download-dialog-title" class="map-surface__title">Download area</div>
+                        <button
+                            id="download-dialog-close-button"
+                            class="map-surface__close-button"
+                            type="button"
+                            aria-label="Close download dialog"
+                            title="Close download dialog"
+                        >
+                            ${closeIcon}
+                        </button>
+                    </div>
+                </div>
+                <form id="download-dialog-form" class="download-dialog__form">
+                    <label class="download-dialog__field">
+                        <span class="download-dialog__label">Name</span>
+                        <input
+                            id="download-dialog-name-input"
+                            class="download-dialog__input"
+                            type="text"
+                            value="${this.escapeHtml(this.buildDefaultDownloadName())}"
+                            autocomplete="off"
+                            maxlength="120"
+                        >
+                    </label>
+                    <label class="download-dialog__field">
+                        <span class="download-dialog__label">Maximum zoom</span>
+                        <select
+                            id="download-dialog-max-zoom-input"
+                            class="download-dialog__input"
+                        >
+                            ${this.renderDownloadZoomOptions()}
+                        </select>
+                    </label>
+                    <div id="download-dialog-error" class="download-dialog__message" aria-live="polite"></div>
+                    <div class="download-dialog__actions">
+                        <button
+                            id="download-dialog-cancel-button"
+                            class="settings-popover__action-button settings-popover__action-button--secondary"
+                            type="button"
+                        >
+                            Cancel
+                        </button>
+                        <button
+                            id="download-dialog-submit-button"
+                            class="settings-popover__action-button"
+                            type="submit"
+                        >
+                            Download
+                        </button>
+                    </div>
+                </form>
+            </div>
+        `;
+    }
+
     private mountMap(): void {
         const mapRoot = this.container.querySelector<HTMLElement>('#map-root');
 
@@ -276,6 +363,10 @@ export class AppShell {
         const locateButton = this.container.querySelector<HTMLButtonElement>('#map-locate-button');
         const layersButton = this.container.querySelector<HTMLButtonElement>('#map-layers-button');
         const downloadButton = this.container.querySelector<HTMLButtonElement>('#map-download-area-button');
+        const downloadDialogBackdrop = this.container.querySelector<HTMLElement>('#download-dialog-backdrop');
+        const downloadDialogCloseButton = this.container.querySelector<HTMLButtonElement>('#download-dialog-close-button');
+        const downloadDialogCancelButton = this.container.querySelector<HTMLButtonElement>('#download-dialog-cancel-button');
+        const downloadDialogForm = this.container.querySelector<HTMLFormElement>('#download-dialog-form');
         const settingsButton = this.container.querySelector<HTMLButtonElement>('#map-settings-button');
         const importLayersButton = this.container.querySelector<HTMLButtonElement>('#settings-import-layers-button');
         const importLayersInput = this.container.querySelector<HTMLInputElement>('#settings-import-layers-input');
@@ -322,7 +413,24 @@ export class AppShell {
         });
 
         downloadButton?.addEventListener('click', async () => {
-            await this.handleViewportDownloadRequest(downloadButton);
+            this.openDownloadDialog();
+        });
+
+        downloadDialogBackdrop?.addEventListener('click', () => {
+            this.closeDownloadDialog();
+        });
+
+        downloadDialogCloseButton?.addEventListener('click', () => {
+            this.closeDownloadDialog();
+        });
+
+        downloadDialogCancelButton?.addEventListener('click', () => {
+            this.closeDownloadDialog();
+        });
+
+        downloadDialogForm?.addEventListener('submit', async (event) => {
+            event.preventDefault();
+            await this.handleViewportDownloadRequest();
         });
 
         settingsButton?.addEventListener('click', (event) => {
@@ -433,6 +541,21 @@ export class AppShell {
         // Updating the icon inline keeps the toggle self-contained without
         // requiring a full re-render of the map shell.
         toggleButton.innerHTML = this.renderToggleIcon();
+    }
+
+    private syncDownloadDialogVisibility(): void {
+        const backdrop = this.container.querySelector<HTMLElement>('#download-dialog-backdrop');
+        const dialog = this.container.querySelector<HTMLElement>('#download-dialog');
+
+        if (!backdrop || !dialog) {
+            return;
+        }
+
+        backdrop.classList.toggle('is-open', this.downloadDialogOpen);
+        backdrop.setAttribute('aria-hidden', this.downloadDialogOpen ? 'false' : 'true');
+        dialog.classList.toggle('is-open', this.downloadDialogOpen);
+        dialog.setAttribute('aria-hidden', this.downloadDialogOpen ? 'false' : 'true');
+        this.syncDownloadDialogFormState();
     }
 
     private syncNorthResetButton(bearing: number): void {
@@ -738,7 +861,7 @@ export class AppShell {
                             id="settings-delete-all-downloads-button"
                             class="settings-popover__action-button settings-popover__action-button--danger"
                             type="button"
-                            ${this.offlineDownloads.length === 0 || this.offlineDownloadInProgress ? 'disabled' : ''}
+                            ${this.offlineDownloads.length === 0 || this.hasBlockedOfflineDownloadMutations() ? 'disabled' : ''}
                         >
                             Delete all
                         </button>
@@ -996,7 +1119,7 @@ export class AppShell {
             <div class="settings-popover__download-row">
                 <div class="settings-popover__download-copy">
                     <div class="settings-popover__download-name">${download.name}</div>
-                    <div class="settings-popover__download-meta">${this.formatDownloadMeta(download)}</div>
+                    ${this.renderOfflineDownloadRowDetail(download)}
                 </div>
                 <button
                     class="settings-popover__delete-button settings-popover__delete-button--danger"
@@ -1004,12 +1127,37 @@ export class AppShell {
                     data-delete-download-id="${download.id}"
                     aria-label="Delete download ${download.name}"
                     title="Delete download ${download.name}"
-                    ${this.offlineDownloadInProgress ? 'disabled' : ''}
+                    ${this.isDownloadDeleteDisabled(download.id) ? 'disabled' : ''}
                 >
                     ${deleteIcon}
                 </button>
             </div>
         `).join('');
+    }
+
+    private renderOfflineDownloadRowDetail(download: OfflineDownloadJob): string {
+        const progress = this.getDownloadProgress(download.id);
+        if (!progress) {
+            return `<div class="settings-popover__download-meta">${this.formatDownloadMeta(download)}</div>`;
+        }
+
+        const progressPercent = progress.totalTiles > 0
+            ? Math.round((progress.completedTiles / progress.totalTiles) * 100)
+            : 0;
+
+        return `
+            <div class="settings-popover__download-progress" aria-label="Download progress ${progressPercent}%">
+                <div class="settings-popover__download-progress-bar">
+                    <div
+                        class="settings-popover__download-progress-fill"
+                        style="width: ${progressPercent}%"
+                    ></div>
+                </div>
+                <div class="settings-popover__download-meta">
+                    ${progress.completedTiles}/${progress.totalTiles} tiles • ${progressPercent}%
+                </div>
+            </div>
+        `;
     }
 
     private readonly handleLayersPopoverClick = async (event: MouseEvent): Promise<void> => {
@@ -1222,7 +1370,7 @@ export class AppShell {
         }
 
         if (deleteAllButton) {
-            deleteAllButton.disabled = this.offlineDownloads.length === 0 || this.offlineDownloadInProgress;
+            deleteAllButton.disabled = this.offlineDownloads.length === 0 || this.hasBlockedOfflineDownloadMutations();
         }
     }
 
@@ -1284,6 +1432,7 @@ export class AppShell {
                 this.settings.tintOfflineTiles
             );
             await this.refreshOfflineDownloads();
+            await this.syncOfflineDownloadOverlay();
         } catch (error) {
             console.error('Unable to initialize offline tile cache metadata.', error);
         }
@@ -1293,38 +1442,108 @@ export class AppShell {
         try {
             this.offlineDownloads = await listOfflineDownloads();
             this.refreshDownloadsPanel();
+            await this.syncOfflineDownloadOverlay();
         } catch (error) {
             console.error('Unable to load offline downloads.', error);
         }
     }
 
-    private async handleViewportDownloadRequest(downloadButton: HTMLButtonElement): Promise<void> {
-        if (!this.mapController || this.offlineDownloadInProgress) {
-            return;
-        }
-
-        const name = window.prompt('Name this offline area.', this.buildDefaultDownloadName());
-        if (name === null) {
-            return;
-        }
-
-        const trimmedName = name.trim();
-        if (!trimmedName) {
-            window.alert('Please provide a non-empty download name.');
-            return;
-        }
-
-        const maxZoomInput = window.prompt(
-            'Maximum zoom level to download.',
-            String(getDefaultDownloadMaxZoom())
+    private async syncOfflineDownloadOverlay(): Promise<void> {
+        await this.mapController?.setOfflineDownloadOverlay(
+            this.offlineDownloads,
+            this.settings.tintOfflineTiles
         );
-        if (maxZoomInput === null) {
+    }
+
+    private openDownloadDialog(): void {
+        this.downloadDialogOpen = true;
+        this.syncDownloadDialogVisibility();
+        this.populateDownloadDialogDefaults();
+    }
+
+    private closeDownloadDialog(force: boolean = false): void {
+        if (this.downloadDialogSubmitting && !force) {
             return;
         }
 
-        const parsedMaxZoom = Number.parseInt(maxZoomInput, 10);
+        this.downloadDialogOpen = false;
+        this.syncDownloadDialogVisibility();
+        this.setDownloadDialogMessage('');
+    }
+
+    private populateDownloadDialogDefaults(): void {
+        const nameInput = this.container.querySelector<HTMLInputElement>('#download-dialog-name-input');
+        const maxZoomInput = this.container.querySelector<HTMLSelectElement>('#download-dialog-max-zoom-input');
+
+        if (nameInput) {
+            nameInput.value = this.buildDefaultDownloadName();
+            window.setTimeout(() => {
+                nameInput.focus();
+                nameInput.select();
+            }, 0);
+        }
+
+        if (maxZoomInput) {
+            maxZoomInput.innerHTML = this.renderDownloadZoomOptions();
+            maxZoomInput.value = this.getDefaultDownloadMaxZoomValue();
+        }
+    }
+
+    private syncDownloadDialogFormState(): void {
+        const nameInput = this.container.querySelector<HTMLInputElement>('#download-dialog-name-input');
+        const maxZoomInput = this.container.querySelector<HTMLSelectElement>('#download-dialog-max-zoom-input');
+        const submitButton = this.container.querySelector<HTMLButtonElement>('#download-dialog-submit-button');
+        const cancelButton = this.container.querySelector<HTMLButtonElement>('#download-dialog-cancel-button');
+        const closeButton = this.container.querySelector<HTMLButtonElement>('#download-dialog-close-button');
+
+        const isDisabled = this.downloadDialogSubmitting;
+        nameInput?.toggleAttribute('disabled', isDisabled);
+        maxZoomInput?.toggleAttribute('disabled', isDisabled);
+
+        if (submitButton) {
+            submitButton.disabled = isDisabled;
+            submitButton.textContent = isDisabled ? 'Downloading…' : 'Download';
+        }
+
+        if (cancelButton) {
+            cancelButton.disabled = isDisabled;
+        }
+
+        if (closeButton) {
+            closeButton.disabled = isDisabled;
+        }
+    }
+
+    private setDownloadDialogMessage(message: string): void {
+        const messageEl = this.container.querySelector<HTMLElement>('#download-dialog-error');
+        if (messageEl) {
+            messageEl.textContent = message;
+            messageEl.classList.toggle('is-visible', message.length > 0);
+        }
+    }
+
+    private async handleViewportDownloadRequest(): Promise<void> {
+        if (!this.mapController) {
+            return;
+        }
+
+        const nameInput = this.container.querySelector<HTMLInputElement>('#download-dialog-name-input');
+        const maxZoomInput = this.container.querySelector<HTMLSelectElement>('#download-dialog-max-zoom-input');
+        if (!nameInput || !maxZoomInput) {
+            return;
+        }
+
+        const trimmedName = nameInput.value.trim();
+        if (!trimmedName) {
+            this.setDownloadDialogMessage('Please provide a non-empty download name.');
+            nameInput.focus();
+            return;
+        }
+
+        const parsedMaxZoom = Number.parseInt(maxZoomInput.value, 10);
         if (Number.isNaN(parsedMaxZoom) || parsedMaxZoom < 0) {
-            window.alert('Please provide a valid non-negative integer zoom level.');
+            this.setDownloadDialogMessage('Please provide a valid non-negative integer zoom level.');
+            maxZoomInput.focus();
             return;
         }
 
@@ -1340,8 +1559,7 @@ export class AppShell {
             return;
         }
 
-        const currentZoomFloor = Math.floor(this.mapController.getCurrentZoom());
-        const plan = createViewportDownloadPlan(bounds, currentZoomFloor, parsedMaxZoom, visibleSources);
+        const plan = createViewportDownloadPlan(bounds, 0, parsedMaxZoom, visibleSources);
         if (plan.tasks.length === 0) {
             window.alert('No tiles were found for the current viewport and zoom range.');
             return;
@@ -1354,30 +1572,57 @@ export class AppShell {
             return;
         }
 
-        this.offlineDownloadInProgress = true;
-        downloadButton.disabled = true;
-        downloadButton.classList.add('is-loading');
+        this.setDownloadDialogMessage('');
+        this.closeDownloadDialog(true);
         this.refreshDownloadsPanel();
+
+        void this.startViewportDownload({
+            name: trimmedName,
+            bounds,
+            minZoom: 0,
+            maxZoom: parsedMaxZoom,
+            sources: visibleSources
+        });
+    }
+
+    private async startViewportDownload(
+        request: {
+            readonly name: string;
+            readonly bounds: [number, number, number, number];
+            readonly minZoom: number;
+            readonly maxZoom: number;
+            readonly sources: readonly RasterSourceConfig[];
+        }
+    ): Promise<void> {
+        let createdJobId: string | null = null;
 
         try {
             await syncOfflineSourceCatalog(getAllRasterSources());
-            const createdJob = await downloadViewportTiles({
-                name: trimmedName,
-                bounds,
-                minZoom: currentZoomFloor,
-                maxZoom: parsedMaxZoom,
-                sources: visibleSources
+            const createdJob = await downloadViewportTiles(request, {
+                onJobCreated: (job) => {
+                    createdJobId = job.id;
+                    this.offlineDownloads = [
+                        job,
+                        ...this.offlineDownloads.filter((entry) => entry.id !== job.id)
+                    ];
+                    this.refreshDownloadsPanel();
+                    void this.syncOfflineDownloadOverlay();
+                },
+                onProgress: (update) => {
+                    this.updateOfflineDownloadProgress(update);
+                }
             });
 
+            this.clearOfflineDownloadProgress(createdJob.id);
             await this.refreshOfflineDownloads();
-            window.alert(`Downloaded ${createdJob.tileCount} tiles (${this.formatBytes(createdJob.sizeBytes)}).`);
         } catch (error) {
             const message = error instanceof Error ? error.message : 'Unable to download the current viewport.';
+            if (createdJobId) {
+                this.clearOfflineDownloadProgress(createdJobId);
+            }
+            await this.refreshOfflineDownloads();
             window.alert(message);
         } finally {
-            this.offlineDownloadInProgress = false;
-            downloadButton.disabled = false;
-            downloadButton.classList.remove('is-loading');
             this.refreshDownloadsPanel();
         }
     }
@@ -1410,10 +1655,11 @@ export class AppShell {
             nextSettings.offlineMode,
             nextSettings.tintOfflineTiles
         );
+        await this.syncOfflineDownloadOverlay();
     }
 
     private async handleDeleteOfflineDownload(downloadId: string): Promise<void> {
-        if (this.offlineDownloadInProgress) {
+        if (this.offlineDownloadMutationInProgress || this.isDownloadActive(downloadId)) {
             return;
         }
 
@@ -1422,7 +1668,7 @@ export class AppShell {
             return;
         }
 
-        this.offlineDownloadInProgress = true;
+        this.offlineDownloadMutationInProgress = true;
         this.refreshDownloadsPanel();
 
         try {
@@ -1432,13 +1678,13 @@ export class AppShell {
             const message = error instanceof Error ? error.message : 'Unable to delete the offline area.';
             window.alert(message);
         } finally {
-            this.offlineDownloadInProgress = false;
+            this.offlineDownloadMutationInProgress = false;
             this.refreshDownloadsPanel();
         }
     }
 
     private async handleDeleteAllOfflineDownloads(): Promise<void> {
-        if (this.offlineDownloadInProgress || this.offlineDownloads.length === 0) {
+        if (this.hasBlockedOfflineDownloadMutations() || this.offlineDownloads.length === 0) {
             return;
         }
 
@@ -1446,7 +1692,7 @@ export class AppShell {
             return;
         }
 
-        this.offlineDownloadInProgress = true;
+        this.offlineDownloadMutationInProgress = true;
         this.refreshDownloadsPanel();
 
         try {
@@ -1456,7 +1702,7 @@ export class AppShell {
             const message = error instanceof Error ? error.message : 'Unable to delete offline areas.';
             window.alert(message);
         } finally {
-            this.offlineDownloadInProgress = false;
+            this.offlineDownloadMutationInProgress = false;
             this.refreshDownloadsPanel();
         }
     }
@@ -1484,8 +1730,65 @@ export class AppShell {
         return `Offline area ${dateLabel}`;
     }
 
+    private renderDownloadZoomOptions(): string {
+        const activeSource = findRasterSourceById(this.activeRasterSourceId);
+        const [minimumZoom, maximumZoom] = activeSource?.zlims ?? [0, getDefaultDownloadMaxZoom()];
+        const defaultZoom = Number.parseInt(this.getDefaultDownloadMaxZoomValue(), 10);
+        const options: string[] = [];
+
+        for (let zoom = minimumZoom; zoom <= maximumZoom; zoom += 1) {
+            options.push(`
+                <option value="${zoom}" ${zoom === defaultZoom ? 'selected' : ''}>
+                    ${zoom}
+                </option>
+            `);
+        }
+
+        return options.join('');
+    }
+
+    private getDefaultDownloadMaxZoomValue(): string {
+        const activeSource = findRasterSourceById(this.activeRasterSourceId);
+        const fallbackZoom = getDefaultDownloadMaxZoom();
+        const maximumZoom = activeSource?.zlims[1] ?? fallbackZoom;
+        const minimumZoom = activeSource?.zlims[0] ?? 0;
+        const defaultZoom = Math.max(minimumZoom, Math.min(fallbackZoom, maximumZoom));
+
+        return String(defaultZoom);
+    }
+
     private formatDownloadMeta(download: OfflineDownloadJob): string {
         return `${this.formatBytes(download.sizeBytes)} • ${download.tileCount} tiles`;
+    }
+
+    private getDownloadProgress(downloadId: string): OfflineDownloadProgressState | null {
+        return this.offlineDownloadProgressById.get(downloadId) ?? null;
+    }
+
+    private updateOfflineDownloadProgress(update: ViewportDownloadProgressUpdate): void {
+        this.offlineDownloadProgressById.set(update.job.id, {
+            jobId: update.job.id,
+            totalTiles: update.totalTiles,
+            completedTiles: update.completedTiles,
+            sizeBytes: update.sizeBytes
+        });
+        this.refreshDownloadsPanel();
+    }
+
+    private clearOfflineDownloadProgress(downloadId: string): void {
+        this.offlineDownloadProgressById.delete(downloadId);
+    }
+
+    private isDownloadDeleteDisabled(downloadId: string): boolean {
+        return this.offlineDownloadMutationInProgress || this.isDownloadActive(downloadId);
+    }
+
+    private isDownloadActive(downloadId: string): boolean {
+        return this.offlineDownloadProgressById.has(downloadId);
+    }
+
+    private hasBlockedOfflineDownloadMutations(): boolean {
+        return this.offlineDownloadMutationInProgress || this.offlineDownloadProgressById.size > 0;
     }
 
     private formatBytes(sizeBytes: number): string {
@@ -1497,6 +1800,15 @@ export class AppShell {
         }
 
         return `${(sizeBytes / (1024 * 1024)).toFixed(1)} MB`;
+    }
+
+    private escapeHtml(value: string): string {
+        return value
+            .replaceAll('&', '&amp;')
+            .replaceAll('<', '&lt;')
+            .replaceAll('>', '&gt;')
+            .replaceAll('"', '&quot;')
+            .replaceAll("'", '&#39;');
     }
 
     private getEnabledBaseSources(): RasterSourceConfig[] {

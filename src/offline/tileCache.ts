@@ -4,6 +4,8 @@ import {
     MAX_DOWNLOAD_TILE_WARNING_COUNT,
     OFFLINE_TILE_CACHE_ROOT,
     OFFLINE_TILE_CACHE_VERSION,
+    type OfflineDownloadFootprint,
+    type OfflineDownloadGeometry,
     type OfflineDownloadJob,
     type OfflineSourceSnapshot,
     type OfflineTileCacheManifest,
@@ -38,6 +40,18 @@ export interface OfflineDownloadPlan {
     readonly maxZoom: number;
     readonly tasks: TileDownloadTask[];
     readonly sourceIds: string[];
+}
+
+export interface ViewportDownloadProgressUpdate {
+    readonly job: OfflineDownloadJob;
+    readonly completedTiles: number;
+    readonly totalTiles: number;
+    readonly sizeBytes: number;
+}
+
+interface ViewportDownloadOptions {
+    readonly onJobCreated?: (job: OfflineDownloadJob) => void;
+    readonly onProgress?: (update: ViewportDownloadProgressUpdate) => void;
 }
 
 export async function syncOfflineSourceCatalog(sources: readonly RasterSourceConfig[]): Promise<void> {
@@ -93,7 +107,8 @@ export function createViewportDownloadPlan(
 }
 
 export async function downloadViewportTiles(
-    request: ViewportDownloadRequest
+    request: ViewportDownloadRequest,
+    options: ViewportDownloadOptions = {}
 ): Promise<OfflineDownloadJob> {
     await ensurePersistentStorage();
 
@@ -117,6 +132,7 @@ export async function downloadViewportTiles(
         createdAt: new Date().toISOString(),
         sourceIds: plan.sourceIds,
         bounds: [...request.bounds] as [number, number, number, number],
+        footprint: createRectangleFootprint(request.bounds),
         minZoom: plan.minZoom,
         maxZoom: plan.maxZoom,
         tileCount: plan.tasks.length,
@@ -130,14 +146,30 @@ export async function downloadViewportTiles(
     };
     await writeManifest(manifestWithJob);
     await notifyOfflineTileCacheUpdated();
+    options.onJobCreated?.(cloneJob(inProgressJob));
+    options.onProgress?.({
+        job: cloneJob(inProgressJob),
+        completedTiles: 0,
+        totalTiles: plan.tasks.length,
+        sizeBytes: 0
+    });
 
     const shardCache = new Map<string, OwnershipShard>();
     let sizeBytes = 0;
+    let completedTiles = 0;
 
     try {
         for (const task of plan.tasks) {
             const sizeDelta = await persistTileTask(task, jobId, shardCache);
             sizeBytes += sizeDelta;
+            completedTiles += 1;
+
+            options.onProgress?.({
+                job: cloneJob(inProgressJob),
+                completedTiles,
+                totalTiles: plan.tasks.length,
+                sizeBytes
+            });
         }
 
         const completedJob: OfflineDownloadJob = {
@@ -452,8 +484,77 @@ function cloneJob(job: OfflineDownloadJob): OfflineDownloadJob {
     return {
         ...job,
         sourceIds: [...job.sourceIds],
-        bounds: [...job.bounds] as [number, number, number, number]
+        bounds: [...job.bounds] as [number, number, number, number],
+        footprint: normalizeFootprint(job.footprint, job.bounds)
     };
+}
+
+function normalizeFootprint(
+    footprint: OfflineDownloadFootprint | undefined,
+    bounds: [number, number, number, number]
+): OfflineDownloadFootprint {
+    if (footprint && isValidGeometry(footprint.geometry)) {
+        return {
+            kind: footprint.kind === 'polygon' ? 'polygon' : 'viewport-rectangle',
+            geometry: cloneGeometry(footprint.geometry)
+        };
+    }
+
+    return createRectangleFootprint(bounds);
+}
+
+function createRectangleFootprint(bounds: [number, number, number, number]): OfflineDownloadFootprint {
+    const [west, south, east, north] = bounds;
+
+    return {
+        kind: 'viewport-rectangle',
+        geometry: {
+            type: 'Polygon',
+            coordinates: [[
+                [west, south],
+                [east, south],
+                [east, north],
+                [west, north],
+                [west, south]
+            ]]
+        }
+    };
+}
+
+function cloneGeometry(geometry: OfflineDownloadGeometry): OfflineDownloadGeometry {
+    if (geometry.type === 'Polygon') {
+        return {
+            type: 'Polygon',
+            coordinates: geometry.coordinates.map((ring) =>
+                ring.map((position) => [...position])
+            )
+        };
+    }
+
+    return {
+        type: 'MultiPolygon',
+        coordinates: geometry.coordinates.map((polygon) =>
+            polygon.map((ring) =>
+                ring.map((position) => [...position])
+            )
+        )
+    };
+}
+
+function isValidGeometry(geometry: unknown): geometry is OfflineDownloadGeometry {
+    if (!isObject(geometry)) {
+        return false;
+    }
+
+    if (geometry.type === 'Polygon') {
+        return Array.isArray(geometry.coordinates);
+    }
+
+    if (geometry.type === 'MultiPolygon') {
+        return Array.isArray(geometry.coordinates);
+    }
+
+    return false;
 }
 
 function buildTileKey(sourceId: string, coordinates: TileCoordinate): string {

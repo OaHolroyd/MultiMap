@@ -13,27 +13,20 @@ self.addEventListener("message", (event) => {
 });
 
 export async function createOfflineTileResponse(request, options = {}) {
-  console.log(`  createOfflineTileResponse`);
   const manifest = await readManifest();
   if (
     !manifest ||
     !Array.isArray(manifest.sources) ||
     manifest.sources.length === 0
   ) {
-    console.log(`    NO MANIFEST`);
     return null;
   }
 
   for (const source of manifest.sources) {
     const coordinates = matchRequestUrlToSource(request.url, source);
-    console.log(`    COORDS ${coordinates}`);
     if (!coordinates) {
       continue;
     }
-
-    console.log(
-      `    MATCH SOURCE ${source.id} @ ${coordinates.z}/${coordinates.x}/${coordinates.y}`,
-    );
 
     const ownershipEntry = await readOwnershipEntry(
       source.id,
@@ -42,7 +35,6 @@ export async function createOfflineTileResponse(request, options = {}) {
       coordinates.y,
     );
     if (!ownershipEntry) {
-      console.log(`    NO OWNERSHIP ENTRY`);
       continue;
     }
 
@@ -55,15 +47,12 @@ export async function createOfflineTileResponse(request, options = {}) {
     );
 
     if (!tileBlob) {
-      console.log(`    NO TILE BLOB`);
       continue;
     }
 
     const responseBlob = options.tintOfflineTiles
       ? await tintTileBlob(tileBlob, ownershipEntry.contentType)
       : tileBlob;
-
-    console.log(`    RETURN OFFLINE TILE`);
 
     return new Response(responseBlob, {
       status: 200,
@@ -73,8 +62,6 @@ export async function createOfflineTileResponse(request, options = {}) {
       },
     });
   }
-
-  console.log("    RETURN NULL");
   return null;
 }
 
@@ -142,19 +129,12 @@ async function getCacheRootDirectory() {
 }
 
 function matchRequestUrlToSource(requestUrl, source) {
-  console.log(`    TRY SOURCE ${source.id}`);
   for (const template of source.tiles ?? []) {
-    console.log(`      TEMPLATE ${template}`);
     const coordinates = matchRequestUrlToTemplate(requestUrl, template);
     if (coordinates) {
-      console.log(
-        `      TEMPLATE MATCH ${coordinates.z}/${coordinates.x}/${coordinates.y}`,
-      );
       return coordinates;
     }
   }
-
-  console.log(`    SOURCE MISS ${source.id}`);
   return null;
 }
 
@@ -172,13 +152,9 @@ function matchRequestUrlToTemplate(requestUrl, template) {
     .replace("__MULTIMAP_Z__", "(?<z>\\d+)")
     .replace("__MULTIMAP_X__", "(?<x>\\d+)")
     .replace("__MULTIMAP_Y__", "(?<y>\\d+)")}$`;
-  console.log(`        REQUEST ${normalizedRequestUrl}`);
-  console.log(`        NORMALIZED TEMPLATE ${normalizedTemplate}`);
-  console.log(`        REGEX ${pattern}`);
   const match = new RegExp(pattern).exec(normalizedRequestUrl);
 
   if (!match?.groups) {
-    console.log(`        REGEX MISS`);
     return null;
   }
 
@@ -187,7 +163,6 @@ function matchRequestUrlToTemplate(requestUrl, template) {
   const y = Number.parseInt(match.groups.y ?? "", 10);
 
   if ([z, x, y].some((value) => Number.isNaN(value))) {
-    console.log(`        NAN COORDINATES`, match.groups);
     return null;
   }
 
