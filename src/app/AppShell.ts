@@ -822,9 +822,6 @@ export class AppShell {
                     ${this.renderSettingsTabButton('downloads', downloadIcon, 'Download settings')}
                 </div>
                 ${this.renderSettingsPopoverPanel('general', `
-                    <div id="settings-offline-overview-general">
-                        ${this.renderOfflineOverviewCard()}
-                    </div>
                     <div class="settings-popover__section">
                         <button
                             id="settings-theme-toggle"
@@ -1483,7 +1480,6 @@ export class AppShell {
     private refreshDownloadsPanel(): void {
         const downloadList = this.container.querySelector<HTMLElement>('#settings-download-list');
         const deleteAllButton = this.container.querySelector<HTMLButtonElement>('#settings-delete-all-downloads-button');
-        const generalOverview = this.container.querySelector<HTMLElement>('#settings-offline-overview-general');
         const downloadsOverview = this.container.querySelector<HTMLElement>('#settings-offline-overview-downloads');
         const bannerSlot = this.container.querySelector<HTMLElement>('#map-offline-status-banner-slot');
 
@@ -1493,10 +1489,6 @@ export class AppShell {
 
         if (deleteAllButton) {
             deleteAllButton.disabled = this.offlineDownloads.length === 0 || this.hasBlockedOfflineDownloadMutations();
-        }
-
-        if (generalOverview) {
-            generalOverview.innerHTML = this.renderOfflineOverviewCard();
         }
 
         if (downloadsOverview) {
