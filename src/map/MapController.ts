@@ -7,6 +7,30 @@ import {
     getOverlayRasterSources,
     type RasterSourceConfig
 } from './sources';
+import type { OfflineDownloadJob } from '../offline/types';
+
+const OFFLINE_DOWNLOADS_SOURCE_ID = 'offline-downloads-source';
+const OFFLINE_DOWNLOADS_FILL_LAYER_ID = 'offline-downloads-fill';
+const OFFLINE_DOWNLOADS_LINE_LAYER_ID = 'offline-downloads-line';
+type OfflineDownloadOverlayGeometry = {
+    type: 'Polygon' | 'MultiPolygon';
+    coordinates: number[][][] | number[][][][];
+};
+
+interface OfflineDownloadOverlayFeature {
+    readonly type: 'Feature';
+    readonly properties: {
+        readonly id: string;
+        readonly name: string;
+        readonly kind: string;
+    };
+    readonly geometry: OfflineDownloadOverlayGeometry;
+}
+
+interface OfflineDownloadOverlayFeatureCollection {
+    readonly type: 'FeatureCollection';
+    readonly features: OfflineDownloadOverlayFeature[];
+}
 
 export class MapController {
     private readonly container: HTMLElement;
@@ -17,8 +41,11 @@ export class MapController {
     private readonly bearingChangeListeners: Array<(bearing: number) => void>;
     private readonly activeSourceChangeListeners: Array<(source: RasterSourceConfig) => void>;
     private readonly activeOverlayChangeListeners: Array<(overlayIds: readonly string[]) => void>;
+    private readonly viewportChangeListeners: Array<(bounds: [number, number, number, number] | null) => void>;
     private activeRasterSource: RasterSourceConfig;
     private activeOverlayIds: string[];
+    private offlineDownloadJobs: OfflineDownloadJob[];
+    private offlineDownloadOverlayVisible: boolean;
 
     constructor(
         container: HTMLElement,
@@ -32,8 +59,11 @@ export class MapController {
         this.bearingChangeListeners = [];
         this.activeSourceChangeListeners = [];
         this.activeOverlayChangeListeners = [];
+        this.viewportChangeListeners = [];
         this.activeRasterSource = this.resolveRasterSource(initialRasterSourceId);
         this.activeOverlayIds = this.resolveOverlayIds(initialOverlayIds);
+        this.offlineDownloadJobs = [];
+        this.offlineDownloadOverlayVisible = false;
         this.mapReadyPromise = new Promise((resolve) => {
             this.resolveMapReady = resolve;
         });
@@ -69,18 +99,24 @@ export class MapController {
                     this.applyRasterSource(overlaySource);
                 }
             });
+            this.syncOfflineDownloadOverlay();
 
             this.resolveMapReady?.();
             this.resolveMapReady = null;
             this.notifyBearingChange();
             this.notifyActiveSourceChange();
             this.notifyActiveOverlayChange();
+            this.notifyViewportChange();
         });
 
         // The shell needs to know when the map is rotated so it can surface a
         // temporary north-up control without owning any map internals itself.
         this.map.on('rotate', () => {
             this.notifyBearingChange();
+        });
+
+        this.map.on('moveend', () => {
+            this.notifyViewportChange();
         });
     }
 
@@ -108,6 +144,11 @@ export class MapController {
     public onActiveOverlaysChange(listener: (overlayIds: readonly string[]) => void): void {
         this.activeOverlayChangeListeners.push(listener);
         listener([...this.activeOverlayIds]);
+    }
+
+    public onViewportChange(listener: (bounds: [number, number, number, number] | null) => void): void {
+        this.viewportChangeListeners.push(listener);
+        listener(this.getViewportBounds());
     }
 
     public async setRasterSource(sourceId: string): Promise<void> {
@@ -206,6 +247,40 @@ export class MapController {
             zoom: Math.max(this.map.getZoom(), 14),
             essential: true
         });
+    }
+
+    public getViewportBounds(): [number, number, number, number] | null {
+        if (!this.map) {
+            return null;
+        }
+
+        const bounds = this.map.getBounds();
+        return [
+            bounds.getWest(),
+            bounds.getSouth(),
+            bounds.getEast(),
+            bounds.getNorth()
+        ];
+    }
+
+    public getCurrentZoom(): number {
+        return this.map?.getZoom() ?? 0;
+    }
+
+    public async setOfflineDownloadOverlay(
+        jobs: readonly OfflineDownloadJob[],
+        isVisible: boolean
+    ): Promise<void> {
+        this.offlineDownloadJobs = jobs.map((job) => ({
+            ...job,
+            sourceIds: [...job.sourceIds],
+            bounds: [...job.bounds] as [number, number, number, number],
+            footprint: job.footprint
+        }));
+        this.offlineDownloadOverlayVisible = isVisible;
+
+        await this.mapReadyPromise;
+        this.syncOfflineDownloadOverlay();
     }
 
     private async getCurrentPosition(): Promise<GeolocationPosition> {
@@ -308,6 +383,68 @@ export class MapController {
         return [...uniqueIds];
     }
 
+    private syncOfflineDownloadOverlay(): void {
+        if (!this.map) {
+            return;
+        }
+
+        const sourceData = this.buildOfflineDownloadFeatureCollection();
+
+        const existingSource = this.map.getSource(OFFLINE_DOWNLOADS_SOURCE_ID) as maplibregl.GeoJSONSource | undefined;
+        if (existingSource) {
+            existingSource.setData(sourceData);
+        } else {
+            this.map.addSource(OFFLINE_DOWNLOADS_SOURCE_ID, {
+                type: 'geojson',
+                data: sourceData
+            });
+
+            this.map.addLayer({
+                id: OFFLINE_DOWNLOADS_FILL_LAYER_ID,
+                type: 'fill',
+                source: OFFLINE_DOWNLOADS_SOURCE_ID,
+                paint: {
+                    'fill-color': '#24b44c',
+                    'fill-opacity': 0.12
+                }
+            });
+
+            this.map.addLayer({
+                id: OFFLINE_DOWNLOADS_LINE_LAYER_ID,
+                type: 'line',
+                source: OFFLINE_DOWNLOADS_SOURCE_ID,
+                paint: {
+                    'line-color': '#24b44c',
+                    'line-width': 2,
+                    'line-opacity': 0.85
+                }
+            });
+        }
+
+        const visibility = this.offlineDownloadOverlayVisible ? 'visible' : 'none';
+        if (this.map.getLayer(OFFLINE_DOWNLOADS_FILL_LAYER_ID)) {
+            this.map.setLayoutProperty(OFFLINE_DOWNLOADS_FILL_LAYER_ID, 'visibility', visibility);
+        }
+        if (this.map.getLayer(OFFLINE_DOWNLOADS_LINE_LAYER_ID)) {
+            this.map.setLayoutProperty(OFFLINE_DOWNLOADS_LINE_LAYER_ID, 'visibility', visibility);
+        }
+    }
+
+    private buildOfflineDownloadFeatureCollection(): OfflineDownloadOverlayFeatureCollection {
+        return {
+            type: 'FeatureCollection',
+            features: this.offlineDownloadJobs.map((job) => ({
+                type: 'Feature',
+                properties: {
+                    id: job.id,
+                    name: job.name,
+                    kind: job.footprint.kind
+                },
+                geometry: job.footprint.geometry as OfflineDownloadOverlayGeometry
+            }))
+        };
+    }
+
     private notifyBearingChange(): void {
         const bearing = this.getNormalizedBearing();
         this.bearingChangeListeners.forEach((listener) => {
@@ -325,6 +462,13 @@ export class MapController {
         const activeOverlayIds = [...this.activeOverlayIds];
         this.activeOverlayChangeListeners.forEach((listener) => {
             listener(activeOverlayIds);
+        });
+    }
+
+    private notifyViewportChange(): void {
+        const bounds = this.getViewportBounds();
+        this.viewportChangeListeners.forEach((listener) => {
+            listener(bounds);
         });
     }
 

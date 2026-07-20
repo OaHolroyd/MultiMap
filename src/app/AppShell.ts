@@ -2,6 +2,7 @@ import { MapController } from '../map/MapController';
 import {
     appendCustomRasterSources,
     deleteCustomRasterSource,
+    findRasterSourceById,
     getAllRasterSources,
     getBaseRasterSources,
     getOverlayRasterSources,
@@ -14,6 +15,24 @@ import {
 import { loadSourceCatalog, saveSourceCatalog } from '../map/sourceStorage';
 import { loadLayerSelection, saveLayerSelection } from '../map/storage';
 import type { LayerSelectionState } from '../map/layerSelection';
+import {
+    createViewportDownloadPlan,
+    estimateOfflineDownloadSizeBytes,
+    deleteAllOfflineDownloads,
+    deleteOfflineDownload,
+    downloadViewportTiles,
+    getDefaultDownloadMaxZoom,
+    getDownloadTileWarningCount,
+    getMaximumOfflineDownloadTileCount,
+    getMaximumOfflineStorageBytes,
+    getOfflineStorageSummary,
+    listOfflineDownloads,
+    syncOfflineSourceCatalog,
+    type OfflineStorageSummary,
+    type ViewportDownloadProgressUpdate
+} from '../offline/tileCache';
+import { syncOfflineServiceWorkerConfig } from '../offline/serviceWorkerBridge';
+import type { OfflineDownloadFootprint, OfflineDownloadJob } from '../offline/types';
 import { loadSettings, saveSettings } from '../settings/storage';
 import {
     type AppTheme,
@@ -25,8 +44,10 @@ import closeIcon from '../assets/close.svg?raw';
 import deleteIcon from '../assets/delete.svg?raw';
 import dragHandleIcon from '../assets/drag-handle.svg?raw';
 import downloadIcon from '../assets/download.svg?raw';
+import airplaneModeIcon from '../assets/airplane-mode.svg?raw';
 import layersIcon from '../assets/layers.svg?raw';
 import locateIcon from '../assets/locate.svg?raw';
+import onlineStatusIcon from '../assets/online-status.svg?raw';
 import routesIcon from '../assets/routes.svg?raw';
 import searchIcon from '../assets/search.svg?raw';
 import settingsIcon from '../assets/settings.svg?raw';
@@ -68,6 +89,23 @@ interface SettingsSwipeState {
     readonly startPointerY: number;
     engaged: boolean;
     offsetX: number;
+}
+
+interface OfflineDownloadProgressState {
+    readonly jobId: string;
+    readonly totalTiles: number;
+    readonly completedTiles: number;
+    readonly sizeBytes: number;
+}
+
+type OfflineCoverageLevel = 'full' | 'partial' | 'none' | 'unknown';
+type OfflineStatusTone = 'success' | 'info' | 'warning';
+
+interface OfflineViewportCoverageState {
+    readonly level: OfflineCoverageLevel;
+    readonly message: string;
+    readonly detail: string;
+    readonly tone: OfflineStatusTone;
 }
 
 const TOP_LEFT_CONTROLS: readonly CollapsibleControlDefinition[] = [
@@ -133,6 +171,7 @@ export class AppShell {
     private mapController: MapController | null;
     private controlsExpanded: boolean;
     private northResetVisible: boolean;
+    private downloadDialogOpen: boolean;
     private layersMenuOpen: boolean;
     private settingsMenuOpen: boolean;
     private activeRasterSourceId: string;
@@ -141,6 +180,12 @@ export class AppShell {
     private settingsPopoverTab: SettingsPopoverTab;
     private settings: AppSettings;
     private layerSelection: LayerSelectionState;
+    private offlineDownloads: OfflineDownloadJob[];
+    private offlineDownloadMutationInProgress: boolean;
+    private readonly offlineDownloadProgressById: Map<string, OfflineDownloadProgressState>;
+    private downloadDialogSubmitting: boolean;
+    private offlineStorageSummary: OfflineStorageSummary | null;
+    private offlineViewportCoverage: OfflineViewportCoverageState;
     private settingsDragState: SettingsDragState | null;
     private settingsSwipeState: SettingsSwipeState | null;
     private suppressSettingsClick: boolean;
@@ -150,13 +195,20 @@ export class AppShell {
         this.mapController = null;
         this.controlsExpanded = true;
         this.northResetVisible = false;
+        this.downloadDialogOpen = false;
         this.layersMenuOpen = false;
         this.settingsMenuOpen = false;
         this.settingsDragState = null;
         this.settingsSwipeState = null;
         this.suppressSettingsClick = false;
+        this.offlineDownloads = [];
+        this.offlineDownloadMutationInProgress = false;
+        this.offlineDownloadProgressById = new Map();
+        this.downloadDialogSubmitting = false;
+        this.offlineStorageSummary = null;
         loadSourceCatalog();
         this.settings = loadSettings();
+        this.offlineViewportCoverage = this.buildUnknownOfflineCoverageState();
         this.layerSelection = loadLayerSelection(this.settings);
         this.activeRasterSourceId = this.layerSelection.activeBaseLayerId;
         this.activeOverlayIds = [...this.layerSelection.activeOverlayIds];
@@ -170,16 +222,21 @@ export class AppShell {
         this.mountMap();
         this.bindEvents();
         this.syncLayersPopoverTab();
-        this.syncThemeSettingControls();
+        this.syncSettingsToggleControls();
+        void this.initializeOfflineState();
     }
 
     private render(): void {
         this.container.innerHTML = `
             <div class="app-shell">
                 <div id="map-root" class="map-root" aria-label="Map view"></div>
+                <div id="map-offline-status-banner-slot">
+                    ${this.renderOfflineStatusBanner()}
+                </div>
 
                 ${CONTROL_CLUSTERS.map((cluster) => this.renderCollapsibleCluster(cluster)).join('')}
 
+                ${this.renderDownloadDialog()}
                 ${this.renderLayersPopover()}
                 ${this.renderSettingsPopover()}
 
@@ -222,6 +279,103 @@ export class AppShell {
         `;
     }
 
+    private renderOfflineStatusBanner(): string {
+        const hasFailedDownloads = this.hasFailedDownloads();
+        const shouldShow = this.settings.offlineMode || hasFailedDownloads;
+        if (!shouldShow) {
+            return '';
+        }
+
+        const detail = hasFailedDownloads && !this.settings.offlineMode
+            ? 'One or more offline downloads failed. Open Downloads in settings to review and remove them.'
+            : this.offlineViewportCoverage.detail;
+        const label = this.settings.offlineMode ? 'Offline mode' : 'Offline status';
+        const icon = this.settings.offlineMode ? airplaneModeIcon : onlineStatusIcon;
+
+        return `
+            <div
+                class="map-status-banner map-status-banner--${this.offlineViewportCoverage.tone}"
+                aria-live="polite"
+                aria-label="${this.escapeHtml(`${label}: ${detail}`)}"
+                title="${this.escapeHtml(detail)}"
+            >
+                ${icon}
+            </div>
+        `;
+    }
+
+    private renderDownloadDialog(): string {
+        return `
+            <div
+                id="download-dialog-backdrop"
+                class="map-surface-backdrop map-surface-backdrop--dialog ${this.downloadDialogOpen ? 'is-open' : ''}"
+                aria-hidden="${this.downloadDialogOpen ? 'false' : 'true'}"
+            ></div>
+            <div
+                id="download-dialog"
+                class="map-surface download-dialog ${this.downloadDialogOpen ? 'is-open' : ''}"
+                role="dialog"
+                aria-modal="true"
+                aria-labelledby="download-dialog-title"
+                aria-hidden="${this.downloadDialogOpen ? 'false' : 'true'}"
+            >
+                <div class="map-surface__header">
+                    <div class="map-surface__header-row">
+                        <div id="download-dialog-title" class="map-surface__title">Download area</div>
+                        <button
+                            id="download-dialog-close-button"
+                            class="map-surface__close-button"
+                            type="button"
+                            aria-label="Close download dialog"
+                            title="Close download dialog"
+                        >
+                            ${closeIcon}
+                        </button>
+                    </div>
+                </div>
+                <form id="download-dialog-form" class="download-dialog__form">
+                    <label class="download-dialog__field">
+                        <span class="download-dialog__label">Name</span>
+                        <input
+                            id="download-dialog-name-input"
+                            class="download-dialog__input"
+                            type="text"
+                            value="${this.escapeHtml(this.buildDefaultDownloadName())}"
+                            autocomplete="off"
+                            maxlength="120"
+                        >
+                    </label>
+                    <label class="download-dialog__field">
+                        <span class="download-dialog__label">Maximum zoom</span>
+                        <select
+                            id="download-dialog-max-zoom-input"
+                            class="download-dialog__input"
+                        >
+                            ${this.renderDownloadZoomOptions()}
+                        </select>
+                    </label>
+                    <div id="download-dialog-error" class="download-dialog__message" aria-live="polite"></div>
+                    <div class="download-dialog__actions">
+                        <button
+                            id="download-dialog-cancel-button"
+                            class="settings-popover__action-button settings-popover__action-button--secondary"
+                            type="button"
+                        >
+                            Cancel
+                        </button>
+                        <button
+                            id="download-dialog-submit-button"
+                            class="settings-popover__action-button"
+                            type="submit"
+                        >
+                            Download
+                        </button>
+                    </div>
+                </form>
+            </div>
+        `;
+    }
+
     private mountMap(): void {
         const mapRoot = this.container.querySelector<HTMLElement>('#map-root');
 
@@ -244,11 +398,16 @@ export class AppShell {
             this.activeRasterSourceId = source.id;
             this.persistLayerSelection();
             this.syncLayersMenuSelection();
+            this.refreshOfflineViewportCoverage();
         });
         this.mapController.onActiveOverlaysChange((overlayIds) => {
             this.activeOverlayIds = [...overlayIds];
             this.persistLayerSelection();
             this.syncLayersMenuSelection();
+            this.refreshOfflineViewportCoverage();
+        });
+        this.mapController.onViewportChange(() => {
+            this.refreshOfflineViewportCoverage();
         });
     }
 
@@ -257,6 +416,11 @@ export class AppShell {
         const resetBearingButton = this.container.querySelector<HTMLButtonElement>('#map-reset-bearing-button');
         const locateButton = this.container.querySelector<HTMLButtonElement>('#map-locate-button');
         const layersButton = this.container.querySelector<HTMLButtonElement>('#map-layers-button');
+        const downloadButton = this.container.querySelector<HTMLButtonElement>('#map-download-area-button');
+        const downloadDialogBackdrop = this.container.querySelector<HTMLElement>('#download-dialog-backdrop');
+        const downloadDialogCloseButton = this.container.querySelector<HTMLButtonElement>('#download-dialog-close-button');
+        const downloadDialogCancelButton = this.container.querySelector<HTMLButtonElement>('#download-dialog-cancel-button');
+        const downloadDialogForm = this.container.querySelector<HTMLFormElement>('#download-dialog-form');
         const settingsButton = this.container.querySelector<HTMLButtonElement>('#map-settings-button');
         const importLayersButton = this.container.querySelector<HTMLButtonElement>('#settings-import-layers-button');
         const importLayersInput = this.container.querySelector<HTMLInputElement>('#settings-import-layers-input');
@@ -300,6 +464,27 @@ export class AppShell {
             this.syncSettingsMenuVisibility();
             this.layersMenuOpen = !this.layersMenuOpen;
             this.syncLayersMenuVisibility();
+        });
+
+        downloadButton?.addEventListener('click', async () => {
+            this.openDownloadDialog();
+        });
+
+        downloadDialogBackdrop?.addEventListener('click', () => {
+            this.closeDownloadDialog();
+        });
+
+        downloadDialogCloseButton?.addEventListener('click', () => {
+            this.closeDownloadDialog();
+        });
+
+        downloadDialogCancelButton?.addEventListener('click', () => {
+            this.closeDownloadDialog();
+        });
+
+        downloadDialogForm?.addEventListener('submit', async (event) => {
+            event.preventDefault();
+            await this.handleViewportDownloadRequest();
         });
 
         settingsButton?.addEventListener('click', (event) => {
@@ -412,6 +597,21 @@ export class AppShell {
         toggleButton.innerHTML = this.renderToggleIcon();
     }
 
+    private syncDownloadDialogVisibility(): void {
+        const backdrop = this.container.querySelector<HTMLElement>('#download-dialog-backdrop');
+        const dialog = this.container.querySelector<HTMLElement>('#download-dialog');
+
+        if (!backdrop || !dialog) {
+            return;
+        }
+
+        backdrop.classList.toggle('is-open', this.downloadDialogOpen);
+        backdrop.setAttribute('aria-hidden', this.downloadDialogOpen ? 'false' : 'true');
+        dialog.classList.toggle('is-open', this.downloadDialogOpen);
+        dialog.setAttribute('aria-hidden', this.downloadDialogOpen ? 'false' : 'true');
+        this.syncDownloadDialogFormState();
+    }
+
     private syncNorthResetButton(bearing: number): void {
         const resetBearingButton = this.container.querySelector<HTMLButtonElement>('#map-reset-bearing-button');
 
@@ -436,7 +636,7 @@ export class AppShell {
             ...BOTTOM_RIGHT_CONTROLS.filter((control) =>
                 !['map-layers-button', 'map-settings-button'].includes(control.id)
             )
-        ];
+        ].filter((control) => control.id !== 'map-download-area-button');
 
         // Centralizing the placeholder bindings keeps the shell readable now,
         // and gives us one place to swap in real handlers as controls graduate
@@ -639,6 +839,22 @@ export class AppShell {
                                 <span class="settings-popover__toggle-thumb"></span>
                             </span>
                         </button>
+                        <button
+                            id="settings-offline-mode-toggle"
+                            class="settings-popover__toggle"
+                            type="button"
+                            role="switch"
+                            aria-checked="${this.settings.offlineMode ? 'true' : 'false'}"
+                            title="Toggle offline mode"
+                        >
+                            <span class="settings-popover__toggle-copy">
+                                <span class="settings-popover__toggle-label">Offline mode</span>
+                                <span class="settings-popover__toggle-meta">Only use locally downloaded tiles and block external fetches.</span>
+                            </span>
+                            <span class="settings-popover__toggle-track" aria-hidden="true">
+                                <span class="settings-popover__toggle-thumb"></span>
+                            </span>
+                        </button>
                     </div>
                 `)}
                 ${this.renderSettingsPopoverPanel('layers', `
@@ -676,8 +892,42 @@ export class AppShell {
                     </div>
                 `)}
                 ${this.renderSettingsPopoverPanel('downloads', `
+                    <div id="settings-offline-overview-downloads">
+                        ${this.renderOfflineOverviewCard()}
+                    </div>
+                    <div class="settings-popover__section">
+                        <button
+                            id="settings-tint-offline-tiles-toggle"
+                            class="settings-popover__toggle"
+                            type="button"
+                            role="switch"
+                            aria-checked="${this.settings.tintOfflineTiles ? 'true' : 'false'}"
+                            title="Toggle offline tile tint"
+                        >
+                            <span class="settings-popover__toggle-copy">
+                                <span class="settings-popover__toggle-label">Tint offline tiles</span>
+                                <span class="settings-popover__toggle-meta">Highlight downloaded tiles in green to verify offline coverage.</span>
+                            </span>
+                            <span class="settings-popover__toggle-track" aria-hidden="true">
+                                <span class="settings-popover__toggle-thumb"></span>
+                            </span>
+                        </button>
+                    </div>
+                    <div class="settings-popover__actions">
+                        <button
+                            id="settings-delete-all-downloads-button"
+                            class="settings-popover__action-button settings-popover__action-button--danger"
+                            type="button"
+                            ${this.offlineDownloads.length === 0 || this.hasBlockedOfflineDownloadMutations() ? 'disabled' : ''}
+                        >
+                            Delete all
+                        </button>
+                    </div>
+                    <div id="settings-download-list" class="settings-popover__list">
+                        ${this.renderOfflineDownloadRows()}
+                    </div>
                     <div class="settings-popover__placeholder">
-                        Download settings will be added here.
+                        Use the map download button to save the current viewport for the active base layer and overlays. In offline mode, uncached tiles in uncovered areas are blocked.
                     </div>
                 `)}
             </div>
@@ -745,6 +995,7 @@ export class AppShell {
         popover.setAttribute('aria-hidden', this.settingsMenuOpen ? 'false' : 'true');
         this.syncSettingsPopoverTab();
         this.refreshSettingsLayersPanel();
+        this.refreshDownloadsPanel();
     }
 
     private syncSettingsPopoverTab(): void {
@@ -763,7 +1014,7 @@ export class AppShell {
             panel.setAttribute('aria-hidden', isActive ? 'false' : 'true');
         });
 
-        this.syncThemeSettingControls();
+        this.syncSettingsToggleControls();
     }
 
     private renderSourceOptions(
@@ -912,6 +1163,119 @@ export class AppShell {
         }).join('');
     }
 
+    private renderOfflineDownloadRows(): string {
+        if (this.offlineDownloads.length === 0) {
+            return `
+                <div class="settings-popover__placeholder">
+                    No offline areas have been downloaded yet.
+                </div>
+            `;
+        }
+
+        return this.offlineDownloads.map((download) => `
+            <div class="settings-popover__download-row">
+                <div class="settings-popover__download-copy">
+                    <div class="settings-popover__download-name">${download.name}</div>
+                    ${this.renderOfflineDownloadRowDetail(download)}
+                    <div class="settings-popover__download-meta">
+                        ${this.escapeHtml(this.buildDownloadDescriptor(download))}
+                    </div>
+                </div>
+                <button
+                    class="settings-popover__delete-button settings-popover__delete-button--danger"
+                    type="button"
+                    data-delete-download-id="${download.id}"
+                    aria-label="Delete download ${download.name}"
+                    title="Delete download ${download.name}"
+                    ${this.isDownloadDeleteDisabled(download.id) ? 'disabled' : ''}
+                >
+                    ${deleteIcon}
+                </button>
+            </div>
+        `).join('');
+    }
+
+    private renderOfflineOverviewCard(): string {
+        const summary = this.offlineStorageSummary;
+        const storageUsage = summary
+            ? `${this.formatBytes(summary.cacheBytes)} cached`
+            : 'Calculating cache size…';
+        const browserQuota = summary
+            ? this.formatOptionalBytes(summary.browserUsageBytes, summary.browserQuotaBytes)
+            : 'Checking browser quota…';
+        const persistenceStatus = summary
+            ? summary.persistentStorageSupported
+                ? summary.persistentStorageGranted === true
+                    ? 'Persistent storage granted'
+                    : 'Persistent storage not granted'
+                : 'Persistent storage unsupported'
+            : 'Checking storage persistence…';
+        const jobsSummary = summary
+            ? `${summary.completeJobs} complete • ${summary.failedJobs} failed • ${summary.activeJobs} active`
+            : `${this.offlineDownloads.length} tracked downloads`;
+
+        return `
+            <div class="settings-popover__summary-card">
+                <div class="settings-popover__summary-row">
+                    <span class="settings-popover__summary-label">Viewport coverage</span>
+                    <span class="settings-popover__summary-value settings-popover__summary-value--${this.offlineViewportCoverage.tone}">
+                        ${this.escapeHtml(this.offlineViewportCoverage.message)}
+                    </span>
+                </div>
+                <div class="settings-popover__summary-meta">${this.escapeHtml(this.offlineViewportCoverage.detail)}</div>
+                <div class="settings-popover__summary-grid">
+                    <div class="settings-popover__summary-block">
+                        <span class="settings-popover__summary-label">Offline cache</span>
+                        <span class="settings-popover__summary-value">${storageUsage}</span>
+                    </div>
+                    <div class="settings-popover__summary-block">
+                        <span class="settings-popover__summary-label">Browser quota</span>
+                        <span class="settings-popover__summary-value">${browserQuota}</span>
+                    </div>
+                    <div class="settings-popover__summary-block">
+                        <span class="settings-popover__summary-label">Persistence</span>
+                        <span class="settings-popover__summary-value">${persistenceStatus}</span>
+                    </div>
+                    <div class="settings-popover__summary-block">
+                        <span class="settings-popover__summary-label">Downloads</span>
+                        <span class="settings-popover__summary-value">${jobsSummary}</span>
+                    </div>
+                </div>
+            </div>
+        `;
+    }
+
+    private renderOfflineDownloadRowDetail(download: OfflineDownloadJob): string {
+        const progress = this.getDownloadProgress(download.id);
+        if (!progress) {
+            const metaText = download.status === 'failed'
+                ? download.failureReason ?? 'Download failed.'
+                : this.formatDownloadMeta(download);
+            const metaClassName = download.status === 'failed'
+                ? 'settings-popover__download-meta settings-popover__download-meta--warning'
+                : 'settings-popover__download-meta';
+            return `<div class="${metaClassName}">${this.escapeHtml(metaText)}</div>`;
+        }
+
+        const progressPercent = progress.totalTiles > 0
+            ? Math.round((progress.completedTiles / progress.totalTiles) * 100)
+            : 0;
+
+        return `
+            <div class="settings-popover__download-progress" aria-label="Download progress ${progressPercent}%">
+                <div class="settings-popover__download-progress-bar">
+                    <div
+                        class="settings-popover__download-progress-fill"
+                        style="width: ${progressPercent}%"
+                    ></div>
+                </div>
+                <div class="settings-popover__download-meta">
+                    ${progress.completedTiles}/${progress.totalTiles} tiles • ${progressPercent}%
+                </div>
+            </div>
+        `;
+    }
+
     private readonly handleLayersPopoverClick = async (event: MouseEvent): Promise<void> => {
         const target = event.target;
         if (!(target instanceof Element)) {
@@ -969,6 +1333,12 @@ export class AppShell {
 
         const deleteButton = target.closest<HTMLButtonElement>('.settings-popover__delete-button');
         if (deleteButton) {
+            const downloadId = deleteButton.dataset.deleteDownloadId;
+            if (downloadId) {
+                await this.handleDeleteOfflineDownload(downloadId);
+                return;
+            }
+
             const sourceId = deleteButton.dataset.deleteSourceId;
             if (sourceId) {
                 await this.animateAndDeleteLayer(sourceId, deleteButton);
@@ -976,9 +1346,27 @@ export class AppShell {
             return;
         }
 
+        const deleteAllDownloadsButton = target.closest<HTMLButtonElement>('#settings-delete-all-downloads-button');
+        if (deleteAllDownloadsButton) {
+            await this.handleDeleteAllOfflineDownloads();
+            return;
+        }
+
         const themeToggle = target.closest<HTMLButtonElement>('#settings-theme-toggle');
         if (themeToggle) {
             this.toggleThemePreference();
+            return;
+        }
+
+        const offlineModeToggle = target.closest<HTMLButtonElement>('#settings-offline-mode-toggle');
+        if (offlineModeToggle) {
+            await this.toggleOfflineModePreference();
+            return;
+        }
+
+        const tintOfflineTilesToggle = target.closest<HTMLButtonElement>('#settings-tint-offline-tiles-toggle');
+        if (tintOfflineTilesToggle) {
+            await this.toggleTintOfflineTilesPreference();
             return;
         }
 
@@ -1089,6 +1477,29 @@ export class AppShell {
         }
     }
 
+    private refreshDownloadsPanel(): void {
+        const downloadList = this.container.querySelector<HTMLElement>('#settings-download-list');
+        const deleteAllButton = this.container.querySelector<HTMLButtonElement>('#settings-delete-all-downloads-button');
+        const downloadsOverview = this.container.querySelector<HTMLElement>('#settings-offline-overview-downloads');
+        const bannerSlot = this.container.querySelector<HTMLElement>('#map-offline-status-banner-slot');
+
+        if (downloadList) {
+            downloadList.innerHTML = this.renderOfflineDownloadRows();
+        }
+
+        if (deleteAllButton) {
+            deleteAllButton.disabled = this.offlineDownloads.length === 0 || this.hasBlockedOfflineDownloadMutations();
+        }
+
+        if (downloadsOverview) {
+            downloadsOverview.innerHTML = this.renderOfflineOverviewCard();
+        }
+
+        if (bannerSlot) {
+            bannerSlot.innerHTML = this.renderOfflineStatusBanner();
+        }
+    }
+
     private toggleThemePreference(): void {
         const nextTheme: AppTheme = this.settings.theme === 'light' ? 'dark' : 'light';
         const nextSettings: AppSettings = {
@@ -1099,7 +1510,7 @@ export class AppShell {
         this.settings = nextSettings;
         saveSettings(nextSettings);
         this.applyThemePreference(nextTheme);
-        this.syncThemeSettingControls();
+        this.syncSettingsToggleControls();
     }
 
     private applyThemePreference(theme: AppTheme): void {
@@ -1115,16 +1526,686 @@ export class AppShell {
         delete document.body.dataset.theme;
     }
 
-    private syncThemeSettingControls(): void {
+    private syncSettingsToggleControls(): void {
         const themeToggle = this.container.querySelector<HTMLButtonElement>('#settings-theme-toggle');
-        if (!themeToggle) {
+        if (themeToggle) {
+            const isLightTheme = this.settings.theme === 'light';
+            themeToggle.classList.toggle('is-active', isLightTheme);
+            themeToggle.setAttribute('aria-checked', isLightTheme ? 'true' : 'false');
+            themeToggle.setAttribute('title', isLightTheme ? 'Switch to dark mode' : 'Switch to light mode');
+        }
+
+        const offlineModeToggle = this.container.querySelector<HTMLButtonElement>('#settings-offline-mode-toggle');
+        if (offlineModeToggle) {
+            offlineModeToggle.classList.toggle('is-active', this.settings.offlineMode);
+            offlineModeToggle.setAttribute('aria-checked', this.settings.offlineMode ? 'true' : 'false');
+            offlineModeToggle.setAttribute('title', this.settings.offlineMode ? 'Disable offline mode' : 'Enable offline mode');
+        }
+
+        const tintOfflineTilesToggle = this.container.querySelector<HTMLButtonElement>('#settings-tint-offline-tiles-toggle');
+        if (tintOfflineTilesToggle) {
+            tintOfflineTilesToggle.classList.toggle('is-active', this.settings.tintOfflineTiles);
+            tintOfflineTilesToggle.setAttribute('aria-checked', this.settings.tintOfflineTiles ? 'true' : 'false');
+            tintOfflineTilesToggle.setAttribute('title', this.settings.tintOfflineTiles ? 'Disable offline tile tint' : 'Enable offline tile tint');
+        }
+    }
+
+    private async initializeOfflineState(): Promise<void> {
+        try {
+            await syncOfflineSourceCatalog(getAllRasterSources());
+            await syncOfflineServiceWorkerConfig(
+                this.settings.offlineMode,
+                this.settings.tintOfflineTiles
+            );
+            await this.refreshOfflineDownloads();
+            await this.refreshOfflineStorageSummary();
+            this.refreshOfflineViewportCoverage();
+            await this.syncOfflineDownloadOverlay();
+        } catch (error) {
+            console.error('Unable to initialize offline tile cache metadata.', error);
+        }
+    }
+
+    private async refreshOfflineDownloads(): Promise<void> {
+        try {
+            this.offlineDownloads = await listOfflineDownloads();
+            await this.refreshOfflineStorageSummary();
+            this.refreshOfflineViewportCoverage();
+            this.refreshDownloadsPanel();
+            await this.syncOfflineDownloadOverlay();
+        } catch (error) {
+            console.error('Unable to load offline downloads.', error);
+        }
+    }
+
+    private async refreshOfflineStorageSummary(): Promise<void> {
+        try {
+            this.offlineStorageSummary = await getOfflineStorageSummary();
+        } catch (error) {
+            console.error('Unable to compute offline storage summary.', error);
+            this.offlineStorageSummary = null;
+        }
+    }
+
+    private async syncOfflineDownloadOverlay(): Promise<void> {
+        await this.mapController?.setOfflineDownloadOverlay(
+            this.offlineDownloads,
+            this.settings.tintOfflineTiles
+        );
+    }
+
+    private openDownloadDialog(): void {
+        this.downloadDialogOpen = true;
+        this.syncDownloadDialogVisibility();
+        this.populateDownloadDialogDefaults();
+    }
+
+    private closeDownloadDialog(force: boolean = false): void {
+        if (this.downloadDialogSubmitting && !force) {
             return;
         }
 
-        const isLightTheme = this.settings.theme === 'light';
-        themeToggle.classList.toggle('is-active', isLightTheme);
-        themeToggle.setAttribute('aria-checked', isLightTheme ? 'true' : 'false');
-        themeToggle.setAttribute('title', isLightTheme ? 'Switch to dark mode' : 'Switch to light mode');
+        this.downloadDialogOpen = false;
+        this.syncDownloadDialogVisibility();
+        this.setDownloadDialogMessage('');
+    }
+
+    private populateDownloadDialogDefaults(): void {
+        const nameInput = this.container.querySelector<HTMLInputElement>('#download-dialog-name-input');
+        const maxZoomInput = this.container.querySelector<HTMLSelectElement>('#download-dialog-max-zoom-input');
+
+        if (nameInput) {
+            nameInput.value = this.buildDefaultDownloadName();
+            window.setTimeout(() => {
+                nameInput.focus();
+                nameInput.select();
+            }, 0);
+        }
+
+        if (maxZoomInput) {
+            maxZoomInput.innerHTML = this.renderDownloadZoomOptions();
+            maxZoomInput.value = this.getDefaultDownloadMaxZoomValue();
+        }
+    }
+
+    private syncDownloadDialogFormState(): void {
+        const nameInput = this.container.querySelector<HTMLInputElement>('#download-dialog-name-input');
+        const maxZoomInput = this.container.querySelector<HTMLSelectElement>('#download-dialog-max-zoom-input');
+        const submitButton = this.container.querySelector<HTMLButtonElement>('#download-dialog-submit-button');
+        const cancelButton = this.container.querySelector<HTMLButtonElement>('#download-dialog-cancel-button');
+        const closeButton = this.container.querySelector<HTMLButtonElement>('#download-dialog-close-button');
+
+        const isDisabled = this.downloadDialogSubmitting;
+        nameInput?.toggleAttribute('disabled', isDisabled);
+        maxZoomInput?.toggleAttribute('disabled', isDisabled);
+
+        if (submitButton) {
+            submitButton.disabled = isDisabled;
+            submitButton.textContent = isDisabled ? 'Downloading…' : 'Download';
+        }
+
+        if (cancelButton) {
+            cancelButton.disabled = isDisabled;
+        }
+
+        if (closeButton) {
+            closeButton.disabled = isDisabled;
+        }
+    }
+
+    private setDownloadDialogMessage(message: string): void {
+        const messageEl = this.container.querySelector<HTMLElement>('#download-dialog-error');
+        if (messageEl) {
+            messageEl.textContent = message;
+            messageEl.classList.toggle('is-visible', message.length > 0);
+        }
+    }
+
+    private async handleViewportDownloadRequest(): Promise<void> {
+        if (!this.mapController) {
+            return;
+        }
+
+        const nameInput = this.container.querySelector<HTMLInputElement>('#download-dialog-name-input');
+        const maxZoomInput = this.container.querySelector<HTMLSelectElement>('#download-dialog-max-zoom-input');
+        if (!nameInput || !maxZoomInput) {
+            return;
+        }
+
+        const trimmedName = nameInput.value.trim();
+        if (!trimmedName) {
+            this.setDownloadDialogMessage('Please provide a non-empty download name.');
+            nameInput.focus();
+            return;
+        }
+
+        const parsedMaxZoom = Number.parseInt(maxZoomInput.value, 10);
+        if (Number.isNaN(parsedMaxZoom) || parsedMaxZoom < 0) {
+            this.setDownloadDialogMessage('Please provide a valid non-negative integer zoom level.');
+            maxZoomInput.focus();
+            return;
+        }
+
+        const bounds = this.mapController.getViewportBounds();
+        if (!bounds) {
+            window.alert('The current map viewport is not available yet.');
+            return;
+        }
+
+        const visibleSources = this.getVisibleRasterSources();
+        if (visibleSources.length === 0) {
+            window.alert('No visible raster layers are available to download.');
+            return;
+        }
+
+        const plan = createViewportDownloadPlan(bounds, 0, parsedMaxZoom, visibleSources);
+        if (plan.tasks.length === 0) {
+            window.alert('No tiles were found for the current viewport and zoom range.');
+            return;
+        }
+
+        if (plan.tasks.length > getMaximumOfflineDownloadTileCount()) {
+            this.setDownloadDialogMessage(
+                `This download is too large. Reduce the area or zoom range below ${getMaximumOfflineDownloadTileCount().toLocaleString()} tiles.`
+            );
+            return;
+        }
+
+        const estimatedDownloadBytes = estimateOfflineDownloadSizeBytes(plan.tasks.length);
+        const currentCacheBytes = this.offlineStorageSummary?.cacheBytes ?? 0;
+        if (currentCacheBytes + estimatedDownloadBytes > getMaximumOfflineStorageBytes()) {
+            this.setDownloadDialogMessage(
+                `This download would exceed the current offline storage cap of ${this.formatBytes(getMaximumOfflineStorageBytes())}.`
+            );
+            return;
+        }
+
+        const browserRemainingBytes = this.offlineStorageSummary?.browserRemainingBytes ?? null;
+        if (browserRemainingBytes !== null && estimatedDownloadBytes > browserRemainingBytes) {
+            this.setDownloadDialogMessage(
+                `This download is estimated at ${this.formatBytes(estimatedDownloadBytes)}, which is larger than the browser's reported free space.`
+            );
+            return;
+        }
+
+        if (
+            plan.tasks.length >= getDownloadTileWarningCount() &&
+            !window.confirm(`This download will fetch ${plan.tasks.length} tiles. Continue?`)
+        ) {
+            return;
+        }
+
+        this.setDownloadDialogMessage('');
+        this.closeDownloadDialog(true);
+        this.refreshDownloadsPanel();
+
+        void this.startViewportDownload({
+            name: trimmedName,
+            bounds,
+            minZoom: 0,
+            maxZoom: parsedMaxZoom,
+            sources: visibleSources
+        });
+    }
+
+    private async startViewportDownload(
+        request: {
+            readonly name: string;
+            readonly bounds: [number, number, number, number];
+            readonly minZoom: number;
+            readonly maxZoom: number;
+            readonly sources: readonly RasterSourceConfig[];
+        }
+    ): Promise<void> {
+        let createdJobId: string | null = null;
+
+        try {
+            await syncOfflineSourceCatalog(getAllRasterSources());
+            const createdJob = await downloadViewportTiles(request, {
+                onJobCreated: (job) => {
+                    createdJobId = job.id;
+                    this.offlineDownloads = [
+                        job,
+                        ...this.offlineDownloads.filter((entry) => entry.id !== job.id)
+                    ];
+                    this.refreshDownloadsPanel();
+                    void this.refreshOfflineStorageSummary().then(() => {
+                        this.refreshDownloadsPanel();
+                    });
+                    void this.syncOfflineDownloadOverlay();
+                },
+                onProgress: (update) => {
+                    this.updateOfflineDownloadProgress(update);
+                }
+            });
+
+            this.clearOfflineDownloadProgress(createdJob.id);
+            await this.refreshOfflineDownloads();
+        } catch (error) {
+            const message = error instanceof Error ? error.message : 'Unable to download the current viewport.';
+            if (createdJobId) {
+                this.clearOfflineDownloadProgress(createdJobId);
+            } else {
+                window.alert(message);
+            }
+            await this.refreshOfflineDownloads();
+        } finally {
+            this.refreshDownloadsPanel();
+        }
+    }
+
+    private async toggleOfflineModePreference(): Promise<void> {
+        const nextSettings: AppSettings = {
+            ...this.settings,
+            offlineMode: !this.settings.offlineMode
+        };
+
+        this.settings = nextSettings;
+        saveSettings(nextSettings);
+        this.syncSettingsToggleControls();
+        await syncOfflineServiceWorkerConfig(
+            nextSettings.offlineMode,
+            nextSettings.tintOfflineTiles
+        );
+        this.refreshOfflineViewportCoverage();
+        this.refreshDownloadsPanel();
+    }
+
+    private async toggleTintOfflineTilesPreference(): Promise<void> {
+        const nextSettings: AppSettings = {
+            ...this.settings,
+            tintOfflineTiles: !this.settings.tintOfflineTiles
+        };
+
+        this.settings = nextSettings;
+        saveSettings(nextSettings);
+        this.syncSettingsToggleControls();
+        await syncOfflineServiceWorkerConfig(
+            nextSettings.offlineMode,
+            nextSettings.tintOfflineTiles
+        );
+        await this.syncOfflineDownloadOverlay();
+        this.refreshOfflineViewportCoverage();
+        this.refreshDownloadsPanel();
+    }
+
+    private async handleDeleteOfflineDownload(downloadId: string): Promise<void> {
+        if (this.offlineDownloadMutationInProgress || this.isDownloadActive(downloadId)) {
+            return;
+        }
+
+        const download = this.offlineDownloads.find((entry) => entry.id === downloadId);
+        if (!download || !window.confirm(`Delete offline area "${download.name}"?`)) {
+            return;
+        }
+
+        this.offlineDownloadMutationInProgress = true;
+        this.refreshDownloadsPanel();
+
+        try {
+            await deleteOfflineDownload(downloadId);
+            await this.refreshOfflineDownloads();
+        } catch (error) {
+            const message = error instanceof Error ? error.message : 'Unable to delete the offline area.';
+            window.alert(message);
+        } finally {
+            this.offlineDownloadMutationInProgress = false;
+            this.refreshDownloadsPanel();
+        }
+    }
+
+    private async handleDeleteAllOfflineDownloads(): Promise<void> {
+        if (this.hasBlockedOfflineDownloadMutations() || this.offlineDownloads.length === 0) {
+            return;
+        }
+
+        if (!window.confirm('Delete all offline areas?')) {
+            return;
+        }
+
+        this.offlineDownloadMutationInProgress = true;
+        this.refreshDownloadsPanel();
+
+        try {
+            await deleteAllOfflineDownloads();
+            await this.refreshOfflineDownloads();
+        } catch (error) {
+            const message = error instanceof Error ? error.message : 'Unable to delete offline areas.';
+            window.alert(message);
+        } finally {
+            this.offlineDownloadMutationInProgress = false;
+            this.refreshDownloadsPanel();
+        }
+    }
+
+    private getVisibleRasterSources(): RasterSourceConfig[] {
+        const visibleSources: RasterSourceConfig[] = [];
+        const activeBaseSource = findRasterSourceById(this.activeRasterSourceId);
+        if (activeBaseSource) {
+            visibleSources.push(activeBaseSource);
+        }
+
+        this.activeOverlayIds.forEach((overlayId) => {
+            const overlaySource = findRasterSourceById(overlayId);
+            if (overlaySource) {
+                visibleSources.push(overlaySource);
+            }
+        });
+
+        return visibleSources;
+    }
+
+    private buildDefaultDownloadName(): string {
+        const now = new Date();
+        const dateLabel = now.toISOString().slice(0, 10);
+        return `Offline area ${dateLabel}`;
+    }
+
+    private renderDownloadZoomOptions(): string {
+        const activeSource = findRasterSourceById(this.activeRasterSourceId);
+        const [minimumZoom, maximumZoom] = activeSource?.zlims ?? [0, getDefaultDownloadMaxZoom()];
+        const defaultZoom = Number.parseInt(this.getDefaultDownloadMaxZoomValue(), 10);
+        const options: string[] = [];
+
+        for (let zoom = minimumZoom; zoom <= maximumZoom; zoom += 1) {
+            options.push(`
+                <option value="${zoom}" ${zoom === defaultZoom ? 'selected' : ''}>
+                    ${zoom}
+                </option>
+            `);
+        }
+
+        return options.join('');
+    }
+
+    private getDefaultDownloadMaxZoomValue(): string {
+        const activeSource = findRasterSourceById(this.activeRasterSourceId);
+        const fallbackZoom = getDefaultDownloadMaxZoom();
+        const maximumZoom = activeSource?.zlims[1] ?? fallbackZoom;
+        const minimumZoom = activeSource?.zlims[0] ?? 0;
+        const defaultZoom = Math.max(minimumZoom, Math.min(fallbackZoom, maximumZoom));
+
+        return String(defaultZoom);
+    }
+
+    private formatDownloadMeta(download: OfflineDownloadJob): string {
+        return `${this.formatBytes(download.sizeBytes)} • ${download.tileCount} tiles`;
+    }
+
+    private buildDownloadDescriptor(download: OfflineDownloadJob): string {
+        const sourceLabels = download.sourceIds
+            .map((sourceId) => findRasterSourceById(sourceId)?.layerId ?? sourceId)
+            .join(', ');
+        const boundsDescriptor = this.describeFootprint(download.footprint, download.bounds);
+
+        return `${sourceLabels} • z${download.minZoom}-${download.maxZoom} • ${boundsDescriptor}`;
+    }
+
+    private describeFootprint(
+        footprint: OfflineDownloadFootprint,
+        bounds: [number, number, number, number]
+    ): string {
+        if (footprint.kind === 'viewport-rectangle') {
+            const width = this.calculateLongitudeSpan(bounds[0], bounds[2]);
+            const height = Math.abs(bounds[3] - bounds[1]);
+            return `Rect ${width.toFixed(1)}° × ${height.toFixed(1)}°`;
+        }
+
+        return 'Polygon area';
+    }
+
+    private refreshOfflineViewportCoverage(): void {
+        const viewportBounds = this.mapController?.getViewportBounds() ?? null;
+        const activeSources = this.getVisibleRasterSources();
+
+        if (!viewportBounds || activeSources.length === 0) {
+            this.offlineViewportCoverage = this.buildUnknownOfflineCoverageState();
+            this.refreshDownloadsPanel();
+            return;
+        }
+
+        const completeDownloads = this.offlineDownloads.filter((download) => download.status === 'complete');
+        const fullyCoveredLabels: string[] = [];
+        const partiallyCoveredLabels: string[] = [];
+        const missingLabels: string[] = [];
+
+        activeSources.forEach((source) => {
+            const matchingDownloads = completeDownloads.filter((download) => download.sourceIds.includes(source.id));
+            const fullyCovered = matchingDownloads.some((download) =>
+                this.boundsFullyCoveredByDownload(viewportBounds, download)
+            );
+            if (fullyCovered) {
+                fullyCoveredLabels.push(source.layerId);
+                return;
+            }
+
+            const partiallyCovered = matchingDownloads.some((download) =>
+                this.boundsIntersectDownload(viewportBounds, download)
+            );
+            if (partiallyCovered) {
+                partiallyCoveredLabels.push(source.layerId);
+                return;
+            }
+
+            missingLabels.push(source.layerId);
+        });
+
+        const visibleSourceCount = activeSources.length;
+        if (fullyCoveredLabels.length === visibleSourceCount) {
+            this.offlineViewportCoverage = {
+                level: 'full',
+                message: 'Full',
+                detail: this.settings.offlineMode
+                    ? 'Current viewport is fully downloaded for all visible layers.'
+                    : 'Current viewport is fully downloaded for all visible layers if you go offline.',
+                tone: 'success'
+            };
+        } else if (fullyCoveredLabels.length > 0 || partiallyCoveredLabels.length > 0) {
+            const detailParts = [
+                partiallyCoveredLabels.length > 0
+                    ? `Partial: ${partiallyCoveredLabels.join(', ')}`
+                    : '',
+                missingLabels.length > 0
+                    ? `Missing: ${missingLabels.join(', ')}`
+                    : ''
+            ].filter((part) => part.length > 0);
+            this.offlineViewportCoverage = {
+                level: 'partial',
+                message: 'Partial',
+                detail: this.settings.offlineMode
+                    ? `${detailParts.join(' • ')}. Uncached tiles will be blocked.`
+                    : detailParts.join(' • '),
+                tone: 'warning'
+            };
+        } else {
+            this.offlineViewportCoverage = {
+                level: 'none',
+                message: 'None',
+                detail: this.settings.offlineMode
+                    ? `Missing: ${missingLabels.join(', ')}. External tiles are blocked in offline mode.`
+                    : `Missing: ${missingLabels.join(', ')}.`,
+                tone: this.settings.offlineMode ? 'warning' : 'info'
+            };
+        }
+
+        this.refreshDownloadsPanel();
+    }
+
+    private getDownloadProgress(downloadId: string): OfflineDownloadProgressState | null {
+        return this.offlineDownloadProgressById.get(downloadId) ?? null;
+    }
+
+    private updateOfflineDownloadProgress(update: ViewportDownloadProgressUpdate): void {
+        this.offlineDownloadProgressById.set(update.job.id, {
+            jobId: update.job.id,
+            totalTiles: update.totalTiles,
+            completedTiles: update.completedTiles,
+            sizeBytes: update.sizeBytes
+        });
+        this.refreshDownloadsPanel();
+    }
+
+    private clearOfflineDownloadProgress(downloadId: string): void {
+        this.offlineDownloadProgressById.delete(downloadId);
+    }
+
+    private isDownloadDeleteDisabled(downloadId: string): boolean {
+        return this.offlineDownloadMutationInProgress || this.isDownloadActive(downloadId);
+    }
+
+    private isDownloadActive(downloadId: string): boolean {
+        return this.offlineDownloadProgressById.has(downloadId);
+    }
+
+    private hasBlockedOfflineDownloadMutations(): boolean {
+        return this.offlineDownloadMutationInProgress || this.offlineDownloadProgressById.size > 0;
+    }
+
+    private hasFailedDownloads(): boolean {
+        return this.offlineDownloads.some((download) => download.status === 'failed');
+    }
+
+    private buildUnknownOfflineCoverageState(): OfflineViewportCoverageState {
+        return {
+            level: 'unknown',
+            message: 'Unknown',
+            detail: this.settings.offlineMode
+                ? 'Offline mode is enabled. Move the map to evaluate viewport coverage.'
+                : 'Move the map to inspect offline coverage for the current viewport.',
+            tone: this.settings.offlineMode ? 'warning' : 'info'
+        };
+    }
+
+    private boundsFullyCoveredByDownload(
+        viewportBounds: [number, number, number, number],
+        download: OfflineDownloadJob
+    ): boolean {
+        const footprintBounds = this.getFootprintBounds(download.footprint);
+        return this.boundsContains(footprintBounds, viewportBounds);
+    }
+
+    private boundsIntersectDownload(
+        viewportBounds: [number, number, number, number],
+        download: OfflineDownloadJob
+    ): boolean {
+        const footprintBounds = this.getFootprintBounds(download.footprint);
+        return this.boundsIntersect(footprintBounds, viewportBounds);
+    }
+
+    private getFootprintBounds(footprint: OfflineDownloadFootprint): [number, number, number, number] {
+        const positions = footprint.geometry.type === 'Polygon'
+            ? footprint.geometry.coordinates.flat()
+            : footprint.geometry.coordinates.flat(2);
+        let west = Number.POSITIVE_INFINITY;
+        let south = Number.POSITIVE_INFINITY;
+        let east = Number.NEGATIVE_INFINITY;
+        let north = Number.NEGATIVE_INFINITY;
+
+        positions.forEach(([longitude, latitude]) => {
+            west = Math.min(west, longitude);
+            south = Math.min(south, latitude);
+            east = Math.max(east, longitude);
+            north = Math.max(north, latitude);
+        });
+
+        return [west, south, east, north];
+    }
+
+    private boundsContains(
+        outerBounds: [number, number, number, number],
+        innerBounds: [number, number, number, number]
+    ): boolean {
+        return this.normalizeWrappedBounds(innerBounds).every((innerSegment) =>
+            this.normalizeWrappedBounds(outerBounds).some((outerSegment) =>
+                outerSegment[0] <= innerSegment[0]
+                && outerSegment[2] >= innerSegment[2]
+                && outerSegment[1] <= innerSegment[1]
+                && outerSegment[3] >= innerSegment[3]
+            )
+        );
+    }
+
+    private boundsIntersect(
+        leftBounds: [number, number, number, number],
+        rightBounds: [number, number, number, number]
+    ): boolean {
+        return this.normalizeWrappedBounds(leftBounds).some((leftSegment) =>
+            this.normalizeWrappedBounds(rightBounds).some((rightSegment) =>
+                leftSegment[0] < rightSegment[2]
+                && leftSegment[2] > rightSegment[0]
+                && leftSegment[1] < rightSegment[3]
+                && leftSegment[3] > rightSegment[1]
+            )
+        );
+    }
+
+    private normalizeWrappedBounds(
+        bounds: [number, number, number, number]
+    ): Array<[number, number, number, number]> {
+        const longitudeSegments = this.normalizeWrappedLongitudeRange(bounds[0], bounds[2]);
+        return longitudeSegments.map(([west, east]) => [west, bounds[1], east, bounds[3]]);
+    }
+
+    private normalizeWrappedLongitudeRange(west: number, east: number): Array<[number, number]> {
+        const normalizedWest = this.normalizeLongitude(west);
+        const normalizedEast = this.normalizeLongitude(east);
+
+        if (normalizedEast >= normalizedWest) {
+            return [[normalizedWest, normalizedEast]];
+        }
+
+        return [
+            [normalizedWest, 180],
+            [-180, normalizedEast]
+        ];
+    }
+
+    private normalizeLongitude(longitude: number): number {
+        let normalizedLongitude = longitude;
+
+        while (normalizedLongitude > 180) {
+            normalizedLongitude -= 360;
+        }
+
+        while (normalizedLongitude < -180) {
+            normalizedLongitude += 360;
+        }
+
+        return normalizedLongitude;
+    }
+
+    private calculateLongitudeSpan(west: number, east: number): number {
+        const segments = this.normalizeWrappedLongitudeRange(west, east);
+        return segments.reduce((total, [segmentWest, segmentEast]) =>
+            total + (segmentEast - segmentWest), 0);
+    }
+
+    private formatOptionalBytes(usedBytes: number | null, totalBytes: number | null): string {
+        if (usedBytes === null || totalBytes === null) {
+            return 'Unavailable';
+        }
+
+        return `${this.formatBytes(usedBytes)} / ${this.formatBytes(totalBytes)}`;
+    }
+
+    private formatBytes(sizeBytes: number): string {
+        if (sizeBytes < 1024) {
+            return `${sizeBytes} B`;
+        }
+        if (sizeBytes < 1024 * 1024) {
+            return `${(sizeBytes / 1024).toFixed(1)} KB`;
+        }
+
+        return `${(sizeBytes / (1024 * 1024)).toFixed(1)} MB`;
+    }
+
+    private escapeHtml(value: string): string {
+        return value
+            .replaceAll('&', '&amp;')
+            .replaceAll('<', '&lt;')
+            .replaceAll('>', '&gt;')
+            .replaceAll('"', '&quot;')
+            .replaceAll("'", '&#39;');
     }
 
     private getEnabledBaseSources(): RasterSourceConfig[] {
@@ -1157,6 +2238,8 @@ export class AppShell {
 
         const nextSettings = {
             theme: this.settings.theme,
+            offlineMode: this.settings.offlineMode,
+            tintOfflineTiles: this.settings.tintOfflineTiles,
             enabledBaseLayerIds: this.mergeEnabledLayerIds(
                 this.settings.enabledBaseLayerIds,
                 importedSources.filter((source) => source.type === 'base').map((source) => source.id)
@@ -1171,6 +2254,7 @@ export class AppShell {
         saveSettings(nextSettings);
         this.refreshLayerSelectionMenu();
         this.refreshSettingsLayersPanel();
+        await syncOfflineSourceCatalog(getAllRasterSources());
 
         window.alert(`Imported ${importedSources.length} layer${importedSources.length === 1 ? '' : 's'}.`);
     }
@@ -1424,6 +2508,7 @@ export class AppShell {
         saveSourceCatalog(getSourceCatalogState());
         this.refreshLayerSelectionMenu();
         this.refreshSettingsLayersPanel();
+        void syncOfflineSourceCatalog(getAllRasterSources());
     }
 
     private clearDraggedItemState(): void {
@@ -1490,6 +2575,7 @@ export class AppShell {
         }
 
         saveSourceCatalog(getSourceCatalogState());
+        await syncOfflineSourceCatalog(getAllRasterSources());
 
         const nextSettings = this.buildSettingsWithoutSource(sourceId, removedSource.type);
         this.settings = nextSettings;

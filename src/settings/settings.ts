@@ -12,6 +12,8 @@ export type AppTheme = 'dark' | 'light';
 
 export interface AppSettings {
     readonly theme: AppTheme;
+    readonly offlineMode: boolean;
+    readonly tintOfflineTiles: boolean;
     readonly enabledBaseLayerIds: string[];
     readonly enabledOverlayIds: string[];
 }
@@ -19,6 +21,8 @@ export interface AppSettings {
 export function getDefaultSettings(): AppSettings {
     return {
         theme: 'dark',
+        offlineMode: false,
+        tintOfflineTiles: false,
         enabledBaseLayerIds: getBaseRasterSources().map((source) => source.id),
         enabledOverlayIds: getOverlayRasterSources().map((source) => source.id)
     };
@@ -27,6 +31,8 @@ export function getDefaultSettings(): AppSettings {
 export function cloneSettings(settings: AppSettings): AppSettings {
     return {
         theme: settings.theme,
+        offlineMode: settings.offlineMode,
+        tintOfflineTiles: settings.tintOfflineTiles,
         enabledBaseLayerIds: [...settings.enabledBaseLayerIds],
         enabledOverlayIds: [...settings.enabledOverlayIds]
     };
@@ -54,6 +60,8 @@ export function migrateStorageShape(savedData: unknown): StorageMigrationResult<
         defaultOverlayIds
     );
     const theme = normalizeTheme(savedData.theme);
+    const offlineMode = savedData.offlineMode === true;
+    const tintOfflineTiles = savedData.tintOfflineTiles === true;
 
     // The layer picker expects at least one base layer to remain available, so
     // persisted settings are normalized to keep a valid fallback.
@@ -64,11 +72,15 @@ export function migrateStorageShape(savedData: unknown): StorageMigrationResult<
 
     const normalizedSettings: AppSettings = {
         theme,
+        offlineMode,
+        tintOfflineTiles,
         enabledBaseLayerIds: normalizedBaseLayerIds,
         enabledOverlayIds: normalizedOverlayIds
     };
 
     const didChange = theme !== savedData.theme
+        || offlineMode !== savedData.offlineMode
+        || tintOfflineTiles !== savedData.tintOfflineTiles
         || !arraysEqual(enabledBaseLayerIds, normalizedBaseLayerIds)
         || !arraysEqual(enabledOverlayIds, normalizedOverlayIds);
 
